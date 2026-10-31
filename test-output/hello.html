@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>工作流测试</title>
+  </head>
+  <body>
+    <main>
+      <h1>工作流测试</h1>
+      <p>当前时间：<time id="current-time"></time></p>
+      <button id="test-button" type="button">测试执行</button>
+    </main>
+    <script>
+      const currentTime = document.querySelector("#current-time");
+      const updateTime = () => {
+        const now = new Date();
+        currentTime.dateTime = now.toISOString();
+        currentTime.textContent = now.toLocaleString("zh-CN", { hour12: false });
+      };
+
+      updateTime();
+      setInterval(updateTime, 1000);
+
+      document.querySelector("#test-button").addEventListener("click", () => {
+        window.alert("Codex 执行成功");
+      });
+    </script>
+  </body>
+</html>
