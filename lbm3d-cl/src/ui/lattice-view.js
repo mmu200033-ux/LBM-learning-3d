@@ -3,7 +3,7 @@ import { createStage } from './stage.js';
 import { PHASE, PHASE_COLOR, tauColor } from './palette.js';
 import { createClipBox, clipPlanes, insideClip } from './clip-box.js';
 import { createBlockView } from './block-view.js';
-import { blockOrigin } from './block-state.js';
+import { blockOrigin, BLOCK_SIZE, BLOCK_COUNT } from './block-state.js';
 
 export function createLatticeView(canvas, overlay, structure, solver) {
   const { L,H,W,phase,order } = structure, N=L*H*W;
@@ -16,7 +16,7 @@ export function createLatticeView(canvas, overlay, structure, solver) {
   const solidMat=new THREE.MeshLambertMaterial({transparent:true,opacity:1});
   const solidMesh=new THREE.InstancedMesh(new THREE.BoxGeometry(0.94,0.94,0.94),solidMat,solidList.length);
   const blockSolidMat=new THREE.MeshLambertMaterial({transparent:true,opacity:0.25,depthWrite:false});
-  const blockSolidMesh=new THREE.InstancedMesh(new THREE.BoxGeometry(0.94,0.94,0.94),blockSolidMat,125);
+  const blockSolidMesh=new THREE.InstancedMesh(new THREE.BoxGeometry(0.94,0.94,0.94),blockSolidMat,BLOCK_COUNT);
   blockSolidMesh.count=0;
   const matrix=new THREE.Matrix4(), color=new THREE.Color();
   solidList.forEach((i,n)=>{const p=toWorld(...coord(i));matrix.makeTranslation(p.x,p.y,p.z);solidMesh.setMatrixAt(n,matrix);solidMesh.setColorAt(n,color.setHex(PHASE_COLOR[phase[i]]));});
@@ -44,7 +44,7 @@ export function createLatticeView(canvas, overlay, structure, solver) {
   const frame=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1,1,1)),new THREE.LineDashedMaterial({color:0xc99a2e,dashSize:0.6,gapSize:0.4}));scene.add(frame);
   const selectedBox=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1.06,1.06,1.06)),new THREE.LineBasicMaterial({color:0xc99a2e,depthTest:false}));selectedBox.renderOrder=10;scene.add(selectedBox);
   const block=createBlockView(stage,structure,solver);
-  let threshold=0,mode='build',cameraMode='global',stepViewInitialized=false,initializeStepView=false,tau=null,selection={x:8,y:16,z:16},onPick=null;
+  let threshold=0,mode='build',cameraMode='global',tau=null,selection={x:8,y:16,z:16},onPick=null;
   let clip={enabled:true,x0:0,x1:L-1,y0:Math.floor(H/2),y1:H-1,z0:0,z1:W-1};
   const stepPlane=new THREE.Plane(new THREE.Vector3(0,1,0),0);
   const clipControl=createClipBox(overlay.querySelector('#clip-controls'),structure,next=>{clip=next;applyClipping();});
@@ -81,20 +81,16 @@ export function createLatticeView(canvas, overlay, structure, solver) {
     for(const [i,el] of [...overlay.querySelectorAll('.legend-item')].entries())el.hidden=!build&&i!==0&&i!==2;
   }
   function setCameraMode(){
-    const local=mode==='step';
-    cameraMode=local?'local':'global';
-    const origin=blockOrigin(structure,selection);
-    const target=local?toWorld(origin.x+2,origin.y+2,origin.z+2):new THREE.Vector3();
-    stage.fit(target,local?0.45:null);
+    cameraMode='global';
+    stage.fit();
   }
   function setSelection(x,y,z,{fly=true,immediate=false}={}){
     selection={x,y,z};selectedBox.position.copy(toWorld(x,y,z));
-    if(initializeStepView){setCameraMode();stepViewInitialized=true;initializeStepView=false;}
     block.setSelection(selection);applyClipping();
     const origin=blockOrigin(structure,selection),matrix=new THREE.Matrix4(),scale=new THREE.Vector3();
     let innerCount=0;
     solidList.forEach((i,n)=>{
-      const [px,py,pz]=coord(i),inside=px>=origin.x&&px<origin.x+5&&py>=origin.y&&py<origin.y+5&&pz>=origin.z&&pz<origin.z+5;
+      const [px,py,pz]=coord(i),inside=px>=origin.x&&px<origin.x+BLOCK_SIZE&&py>=origin.y&&py<origin.y+BLOCK_SIZE&&pz>=origin.z&&pz<origin.z+BLOCK_SIZE;
       const world=toWorld(px,py,pz);matrix.compose(world,new THREE.Quaternion(),scale.setScalar(mode==='step'&&inside?0:1));solidMesh.setMatrixAt(n,matrix);
       if(inside){matrix.makeTranslation(world.x,world.y,world.z);blockSolidMesh.setMatrixAt(innerCount,matrix);blockSolidMesh.setColorAt(innerCount,color.setHex(PHASE_COLOR[phase[i]]));innerCount++;}
     });
@@ -102,22 +98,24 @@ export function createLatticeView(canvas, overlay, structure, solver) {
   }
   function setMode(value,{immediate=false}={}){
     mode=value;overlay.querySelector('#clip-controls').hidden=value!=='build';
-    if(value==='step'){setTau(null);setRevealOrder(Infinity);if(!stepViewInitialized)initializeStepView=true;}
+    if(value==='step'){setTau(null);setRevealOrder(Infinity);}
     applyClipping();background();
   }
-  stage.resetBtn.addEventListener('click',setCameraMode);
-
   const raycaster=new THREE.Raycaster();raycaster.params.Points.threshold=0.4;const ndc=new THREE.Vector2();let down=null;
   canvas.addEventListener('contextmenu',e=>e.preventDefault());
-  canvas.addEventListener('pointerdown',e=>{down=e.button===0?[e.clientX,e.clientY]:null;});
+  canvas.addEventListener('pointerdown',e=>{down=e.button===0?{x:e.clientX,y:e.clientY,id:e.pointerId,moved:false}:null;});
+  canvas.addEventListener('pointermove',e=>{if(down&&down.id===e.pointerId&&Math.hypot(e.clientX-down.x,e.clientY-down.y)>4)down.moved=true;});
   canvas.addEventListener('pointerup',e=>{
     const start=down;down=null;
-    if(e.button!==0||!start||Math.hypot(e.clientX-start[0],e.clientY-start[1])>4)return;
+    if(e.button!==0||!start||start.moved)return;
     const rect=canvas.getBoundingClientRect();ndc.set((e.clientX-rect.left)/rect.width*2-1,-(e.clientY-rect.top)/rect.height*2+1);raycaster.setFromCamera(ndc,camera);
     if(mode==='step'){const node=block.pick(raycaster);if(node)onPick?.(node.x,node.y,node.z);return;}
     const hits=raycaster.intersectObjects([solidMesh,...(points.visible?[points]:[])]);
     for(const hit of hits){const i=hit.object===solidMesh?solidList[hit.instanceId]:dotList[hit.index];if(i===undefined)continue;const xyz=coord(i);if(mode==='build'&&!insideClip(clip,...xyz))continue;onPick?.(...xyz);break;}
   });
+  const cancelPick=e=>{if(down?.id===e.pointerId)down=null;};
+  canvas.addEventListener('pointercancel',cancelPick);
+  canvas.addEventListener('lostpointercapture',cancelPick);
   stage.pinLabel(overlay.querySelector('.inlet-label'),toWorld(-1.5,center.y,W+1));stage.pinLabel(overlay.querySelector('.outlet-label'),toWorld(L+0.5,center.y,W+1));
   setTau(null);setRevealOrder(0);applyClipping();block.setVisible(false);
   return { camera,controls:stage.controls,renderer,block,clipControl,setRevealOrder,setTau,setSelection,setMode,setCameraMode,

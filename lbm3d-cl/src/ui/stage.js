@@ -11,10 +11,6 @@ export function createStage(canvas, overlay, { L, H, W }) {
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
   controls.dampingFactor = 0.12;
-  controls.screenSpacePanning = true;
-  controls.zoomToCursor = true;
-  controls.minDistance = 2;
-  controls.maxDistance = Math.hypot(L, H, W) * 4;
   scene.add(new THREE.AmbientLight(0xffffff, 0.62));
   const key = new THREE.DirectionalLight(0xffffff, 0.9);
   key.position.set(-0.6, -1, 1.3);
@@ -34,24 +30,16 @@ export function createStage(canvas, overlay, { L, H, W }) {
   );
   scene.add(box);
 
-  function fit(target = new THREE.Vector3(), heightFraction = null) {
+  function fit() {
     if (!canvas.clientWidth || !canvas.clientHeight) return;
+    const r = Math.hypot(L, H, W) * 0.5;
     const vFov = (camera.fov * Math.PI) / 180;
+    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+    const fov = Math.min(vFov, hFov);
+    const dist = (r / Math.sin(fov / 2)) * 0.78;
     const dir = new THREE.Vector3(0.32, -1, 0.5).normalize();
-    let dist;
-    if (heightFraction) {
-      const screenUp = new THREE.Vector3(0, 0, 1).addScaledVector(dir, -dir.z).normalize();
-      const projectedHeight = 5 * (Math.abs(screenUp.x) + Math.abs(screenUp.y) + Math.abs(screenUp.z));
-      dist = projectedHeight / (2 * Math.tan(vFov / 2) * heightFraction);
-    } else {
-      const r = Math.hypot(L, H, W) * 0.5;
-      const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
-      const fov = Math.min(vFov, hFov);
-      dist = (r / Math.sin(fov / 2)) * 0.92;
-    }
     camera.position.copy(dir.multiplyScalar(dist));
-    camera.position.add(target);
-    controls.target.copy(target);
+    controls.target.set(0, 0, 0);
     controls.update();
   }
 
@@ -108,6 +96,7 @@ export function createStage(canvas, overlay, { L, H, W }) {
   const resetBtn = document.createElement('button');
   resetBtn.className = 'reset-view';
   resetBtn.textContent = '重置视角';
+  resetBtn.addEventListener('click', fit);
   overlay.appendChild(resetBtn);
 
   function render() {

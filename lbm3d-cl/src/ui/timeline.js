@@ -1,5 +1,5 @@
 export const RECORD_INTERVAL = 25;
-export const MAX_FRAMES = 200;
+export const MAX_FRAMES = 400;
 
 // Each frame owns its bytes/profile/diagnostics; it never aliases live solver data.
 export function createConcentrationRecording(structure, solver, { targetFrame = null } = {}) {
@@ -32,7 +32,8 @@ export function createConcentrationRecording(structure, solver, { targetFrame = 
   return { frames, advance, recordCurrent,
     get complete() { return frames.length >= limit; },
     get capped() { return frames.length === MAX_FRAMES; },
-    stats() { return { frames: frames.length, steps: solver.t, complete: this.complete, capped: this.capped, solveCpuMs, elapsedMs: startedAt === null ? 0 : (completedAt ?? performance.now()) - startedAt, retainedFieldBytes: frames.length * N }; }
+    get limit() { return limit; },
+    stats() { return { frames: frames.length, steps: solver.t, complete: this.complete, capped: this.capped, limit, solveCpuMs, elapsedMs: startedAt === null ? 0 : (completedAt ?? performance.now()) - startedAt, retainedFieldBytes: frames.length * N }; }
   };
 }
 
@@ -52,7 +53,7 @@ export function createTimeline(container, recording, onDisplay, { targetFrame = 
     button.setAttribute('aria-label', playing ? '暂停浓度回放' : '播放浓度回放');
     const frame = recording.frames[index];
     if (frame) time.textContent = '第 ' + frame.step + ' 步 · t = ' + (frame.timeSeconds * 1e9).toFixed(2) + ' ns';
-    status.textContent = recording.capped ? '已到记录上限' : recording.complete ? '已到指定帧' : '计算中 · ' + recording.frames.length + '/200 帧';
+    status.textContent = targetFrame !== null && recording.complete ? '已到指定帧' : recording.capped ? '已到记录上限' : '计算中 · ' + recording.frames.length + '/' + recording.limit + ' 帧';
   }
   function display(next) {
     if (!recording.frames.length) return;

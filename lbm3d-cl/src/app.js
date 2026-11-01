@@ -4,7 +4,7 @@ import { createVolumeView } from './ui/volume-view.js';
 import { createInspector } from './ui/inspector.js';
 import { createChart } from './ui/chart.js';
 import { readUrlState } from './ui/url-state.js';
-import { captureBlock, captureDistributions, blockFromSnapshot, blockOrigin, wrap } from './ui/block-state.js';
+import { captureBlock, captureDistributions, blockFromSnapshot, blockOrigin, wrap, BLOCK_SIZE } from './ui/block-state.js';
 import { createConcentrationRecording, createTimeline } from './ui/timeline.js';
 
 const BUILD_STAGES = [
@@ -128,7 +128,7 @@ function updateCaption() {
   $('caption-text').textContent=mode==='build'?BUILD_STAGES[stage].cap:index<0?'按 ⏭ 执行第一个子步：迁移':STEP_LABELS[index]+'：'+STEP_CAPS[index];
   const local=$('caption-local'),origin=blockOrigin(structure,stepSelection);
   local.hidden=mode!=='step';
-  local.textContent='局部块 ('+origin.x+'..'+(origin.x+4)+', '+origin.y+'..'+(origin.y+4)+', '+origin.z+'..'+(origin.z+4)+') · 当前第 '+ts.t+' 步';
+  local.textContent='局部块 '+BLOCK_SIZE+'×'+BLOCK_SIZE+'×'+BLOCK_SIZE+' ('+origin.x+'..'+(origin.x+BLOCK_SIZE-1)+', '+origin.y+'..'+(origin.y+BLOCK_SIZE-1)+', '+origin.z+'..'+(origin.z+BLOCK_SIZE-1)+') · 当前第 '+ts.t+' 步';
 }
 function beginAnimation() {
   animationProgress=0; animation={kind:'sub',start:performance.now(),duration:900/speed}; lattice.block.animate(0); refreshUpper();
