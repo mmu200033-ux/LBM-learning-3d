@@ -8,6 +8,20 @@ const easeQuad=p=>p<0.5?2*p*p:1-((-2*p+2)**2)/2;
 const mix=(a,b,p)=>a+(b-a)*p;
 const central=(x,y,z)=>x>=0&&x<5&&y>=0&&y<5&&z>=0&&z<5;
 
+// The local solid mesh is created by lattice-view before this block view is
+// initialized. Normalize its material here so the embedded carbon, ionomer,
+// and platinum cells render like the opaque global structure.
+function makeLocalSolidOpaque(scene) {
+  scene.traverse(object => {
+    const material=object.material;
+    if(!object.isInstancedMesh||object.count!==0||!material?.isMeshLambertMaterial||material.opacity>=1)return;
+    material.opacity=1.0;
+    material.transparent=false;
+    material.depthWrite=true;
+    material.needsUpdate=true;
+  });
+}
+
 // Per-instance opacity keeps the 875+ moving distributions in a few draw calls.
 function instances(geometry,capacity,{wireframe=false}={}) {
   const alpha=new THREE.InstancedBufferAttribute(new Float32Array(capacity),1);
@@ -33,6 +47,7 @@ function instances(geometry,capacity,{wireframe=false}={}) {
 
 export function createBlockView(stage,structure,solver,{toWorld=stage.toWorld}={}) {
   const {L,H,W}=structure,{scene}=stage;
+  makeLocalSolidOpaque(scene);
   const group=new THREE.Group();scene.add(group);
   const packets=instances(new THREE.BoxGeometry(1,1,1),2401);
   const ghosts=instances(new THREE.BoxGeometry(1,1,1),1000,{wireframe:true});

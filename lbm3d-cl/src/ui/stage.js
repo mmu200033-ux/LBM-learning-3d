@@ -41,7 +41,8 @@ export function createStage(canvas, overlay, { L, H, W }) {
     const vFov = (camera.fov * Math.PI) / 180;
     const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
     const fov = Math.min(vFov, hFov);
-    const dist = (r / Math.sin(fov / 2)) * 0.78;
+    // Leave enough margin for the complete structure and the in-place teaching block.
+    const dist = (r / Math.sin(fov / 2)) * 0.92;
     const dir = new THREE.Vector3(0.32, -1, 0.5).normalize();
     camera.position.copy(dir.multiplyScalar(dist));
     controls.target.set(0, 0, 0);

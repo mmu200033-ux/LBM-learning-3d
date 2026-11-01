@@ -33,9 +33,12 @@ export function createLatticeView(canvas, overlay, structure, solver) {
   const slabMat=new THREE.MeshLambertMaterial({color:PHASE_COLOR[PHASE.BUFFER],transparent:true,opacity:0.28,depthWrite:false});
   const wallMat=new THREE.MeshLambertMaterial({color:PHASE_COLOR[PHASE.WALL],transparent:true,opacity:0.55,depthWrite:false});
   const slabs=new THREE.Group();
+  const bufferSlabs=[];
+  const wallSlabs=[];
   for(const side of [0,1]){
     const slab=new THREE.Mesh(new THREE.BoxGeometry(2,H,W),slabMat);slab.position.copy(toWorld(side?L-2.5:1.5,center.y,center.z));
-    const wall=new THREE.Mesh(new THREE.BoxGeometry(1,H,W),wallMat);wall.position.copy(toWorld(side?L-1:0,center.y,center.z));slabs.add(slab,wall);
+    const wall=new THREE.Mesh(new THREE.BoxGeometry(1,H,W),wallMat);wall.position.copy(toWorld(side?L-1:0,center.y,center.z));
+    bufferSlabs.push(slab);wallSlabs.push(wall);slabs.add(slab,wall);
   }
   scene.add(slabs);
   const frame=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1,1,1)),new THREE.LineDashedMaterial({color:0xc99a2e,dashSize:0.6,gapSize:0.4}));scene.add(frame);
@@ -57,7 +60,10 @@ export function createLatticeView(canvas, overlay, structure, solver) {
   const lower=(list,pred)=>{let lo=0,hi=list.length;while(lo<hi){const m=(lo+hi)>>1;if(pred(list[m]))lo=m+1;else hi=m;}return lo;};
   function setRevealOrder(value){
     threshold=value;solidMesh.count=lower(solidList,i=>order[i]<value);geo.setDrawRange(0,lower(dotList,i=>dotKey(i)>=value));
-    slabs.visible=value>(structure.stages.find(s=>s.name==='buffer-wall')?.start??Infinity);
+    const bufferVisible=value>(structure.stages.find(s=>s.name==='buffer-wall')?.start??Infinity);
+    slabs.visible=bufferVisible;
+    bufferSlabs.forEach(mesh=>{mesh.visible=bufferVisible;});
+    wallSlabs.forEach(mesh=>{mesh.visible=bufferVisible;});
   }
   function setTau(value){
     tau=value;overlay.querySelector('#tau-legend').hidden=!value;pointMat.size=value?0.4:0.22;
@@ -65,14 +71,20 @@ export function createLatticeView(canvas, overlay, structure, solver) {
   }
   function background(){
     const build=mode==='build';
-    solidMesh.visible=build||mode==='step';blockSolidMesh.visible=mode==='step';points.visible=build;slabs.visible=(build&&threshold>(structure.stages.find(s=>s.name==='buffer-wall')?.start??Infinity))||mode==='step';
+    solidMesh.visible=build||mode==='step';blockSolidMesh.visible=mode==='step';points.visible=build;
+    const bufferVisible=build&&threshold>(structure.stages.find(s=>s.name==='buffer-wall')?.start??Infinity);
+    slabs.visible=bufferVisible||mode==='step';
+    bufferSlabs.forEach(mesh=>{mesh.visible=bufferVisible;});
+    wallSlabs.forEach(mesh=>{mesh.visible=bufferVisible||mode==='step';});
     stage.box.visible=build;selectedBox.visible=build;frame.visible=build&&clip.enabled;block.setVisible(!build);
     for(const el of overlay.querySelectorAll('.inlet-label,.outlet-label'))el.hidden=!build;
     for(const [i,el] of [...overlay.querySelectorAll('.legend-item')].entries())el.hidden=!build&&i!==0&&i!==2;
   }
   function setCameraMode(value,immediate=false){
-    cameraMode=mode==='step'?'block':value;
-    if(cameraMode==='block'){const target=block.target();const distance=5.04/(2*Math.tan(THREE.MathUtils.degToRad(camera.fov/2))*0.45);stage.flyTo(target,distance,immediate);}else stage.fit();
+    // Keep OrbitControls centered on the complete structure in every mode.
+    // The local block remains visible in place without taking over the orbit target.
+    cameraMode='global';
+    stage.fit();
     background();
   }
   function setSelection(x,y,z,{fly=true,immediate=false}={}){
@@ -86,14 +98,15 @@ export function createLatticeView(canvas, overlay, structure, solver) {
       if(inside){matrix.makeTranslation(world.x,world.y,world.z);blockSolidMesh.setMatrixAt(innerCount,matrix);blockSolidMesh.setColorAt(innerCount,color.setHex(PHASE_COLOR[phase[i]]));innerCount++;}
     });
     solidMesh.instanceMatrix.needsUpdate=true;blockSolidMesh.count=innerCount;blockSolidMesh.instanceMatrix.needsUpdate=true;if(blockSolidMesh.instanceColor)blockSolidMesh.instanceColor.needsUpdate=true;
-    if(mode==='step'&&fly)setCameraMode('block',immediate);
+    // Selection changes move the teaching block, but the free camera keeps its
+    // target at the center of the complete structure.
   }
   function setMode(value,{immediate=false}={}){
     mode=value;overlay.querySelector('#clip-controls').hidden=value!=='build';
-    if(value==='step'){setTau(null);setRevealOrder(Infinity);setCameraMode('block',immediate);}else{setCameraMode('global',immediate);}
+    if(value==='step'){setTau(null);setRevealOrder(Infinity);setCameraMode('global',immediate);}else{setCameraMode('global',immediate);}
     applyClipping();background();
   }
-  stage.resetBtn.addEventListener('click',()=>{if(mode==='step'&&cameraMode==='block')setCameraMode('block');});
+  stage.resetBtn.addEventListener('click',()=>setCameraMode('global'));
 
   const raycaster=new THREE.Raycaster();raycaster.params.Points.threshold=0.4;const ndc=new THREE.Vector2();let down=null;
   canvas.addEventListener('pointerdown',e=>{down=[e.clientX,e.clientY];});
