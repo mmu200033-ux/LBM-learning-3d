@@ -8,8 +8,8 @@
 <script type="importmap">
 {
   "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    "three": "./vendor/three.module.min.js",
+    "three/addons/controls/OrbitControls.js": "./vendor/OrbitControls.js"
   }
 }
 </script>
@@ -21,7 +21,7 @@
     <p class="subtitle">D3Q7 多松弛时间格子玻尔兹曼方法 · 李兴博士论文第 2 章</p>
   </div>
   <div class="header-right">
-    <span class="badge">原型数据</span>
+    <span class="badge">D3Q7 MRT · 真实求解</span>
     <label>种子 <input type="number" id="seed" value="42" min="1" step="1"></label>
     <button id="regen">重新生成</button>
   </div>
@@ -41,6 +41,8 @@
     <div class="canvas-wrap">
       <canvas id="lattice-canvas"></canvas>
       <div class="lattice-overlay">
+        <div id="clip-controls" class="clip-controls"></div>
+        <button id="camera-toggle" class="camera-toggle" hidden>全局 / 局部</button>
         <div class="legend">
           <div class="legend-item"><span class="swatch pore"></span>孔隙</div>
           <div class="legend-item"><span class="swatch ionomer"></span>离聚物</div>
@@ -48,6 +50,7 @@
           <div class="legend-item"><span class="swatch pt"></span>铂</div>
           <div class="legend-item"><span class="swatch buffer"></span>缓冲层</div>
         </div>
+        <div id="tau-legend" class="tau-legend" hidden><div class="tau-gradient"></div><div><span>τ 0.5</span><span>1.9</span></div></div>
         <div class="gizmo"></div>
         <div class="label inlet-label">O₂ 入口 · 微孔层</div>
         <div class="label outlet-label">质子交换膜</div>
@@ -89,8 +92,9 @@
       </div>
       <svg id="stencil" viewBox="0 0 400 280"></svg>
       <table class="dist-table">
+        <caption id="substep-info">尚未开始</caption>
         <thead>
-          <tr><th>方向</th><th>权重</th><th>当前值</th><th>状态</th></tr>
+          <tr><th>方向</th><th>权重</th><th>子步前</th><th>子步后</th><th>Δ</th><th>状态</th></tr>
         </thead>
         <tbody id="dist-rows"></tbody>
       </table>
@@ -101,6 +105,13 @@
     <div class="panel-header">
       <span class="panel-index">03</span>
       <h2>三维浓度可视化</h2>
+      <div class="volume-controls">
+        <label><input id="show-solids" type="checkbox" checked> 显示固相</label>
+        <label><input id="slice-enabled" type="checkbox"> 切片</label>
+        <select id="slice-axis" aria-label="切片轴"><option>x</option><option selected>y</option><option>z</option></select>
+        <input id="slice-position" type="range" min="0" max="31" step="1" value="16" aria-label="切片位置">
+        <output id="slice-value">16</output>
+      </div>
       <button id="run-toggle" class="run-btn">连续求解</button>
     </div>
     <div class="conc-wrap">
@@ -140,8 +151,9 @@
     <span>Δx = <strong>5 nm</strong></span>
     <span>Δt = <strong id="footer-dt">2.5 ps</strong></span>
     <span>η = <strong id="footer-eta">0.30 V</strong></span>
-    <span>边界 <strong>x=0 恒浓度 · x=L−1 零通量</strong></span>
+    <span>边界 <strong>x=1 恒浓度 · x=L−1 零通量 · y/z 周期</strong></span>
   </div>
+  <div class="model-note">模型简化：过电势定值、网格缩小、重构按 y/z 全周期。</div>
 </footer>
 
 <script type="module" src="src/app.js"></script>

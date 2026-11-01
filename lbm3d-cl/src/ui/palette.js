@@ -1,5 +1,5 @@
 // Shared colors and labels for the UI layer.
-import { PHASE } from '../engine/mock-engine.js';
+import { PHASE } from '../engine/index.js';
 export { PHASE };
 
 export const PHASE_COLOR = {

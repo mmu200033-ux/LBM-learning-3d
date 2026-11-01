@@ -11,6 +11,8 @@ export function createStage(canvas, overlay, { L, H, W }) {
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
   controls.dampingFactor = 0.12;
+  let flight = null;
+  controls.addEventListener('start', () => { flight = null; });
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.62));
   const key = new THREE.DirectionalLight(0xffffff, 0.9);
@@ -32,6 +34,7 @@ export function createStage(canvas, overlay, { L, H, W }) {
   scene.add(box);
 
   function fit() {
+    flight = null;
     if (!canvas.clientWidth || !canvas.clientHeight) return;
     const r = Math.hypot(L, H, W) * 0.5;
     // 视场按宽高中较紧的一边算，让计算域占满画布
@@ -43,6 +46,15 @@ export function createStage(canvas, overlay, { L, H, W }) {
     camera.position.copy(dir.multiplyScalar(dist));
     controls.target.set(0, 0, 0);
     controls.update();
+  }
+
+  function flyTo(target, distance, immediate = false) {
+    const end = target.clone().addScaledVector(new THREE.Vector3(0.32, -1, 0.5).normalize(), distance);
+    if (immediate) {
+      flight = null; controls.target.copy(target); camera.position.copy(end); controls.update();
+    } else {
+      flight = { start: performance.now(), from: camera.position.clone(), targetFrom: controls.target.clone(), end, target: target.clone() };
+    }
   }
 
   function resize() {
@@ -102,11 +114,18 @@ export function createStage(canvas, overlay, { L, H, W }) {
   overlay.appendChild(resetBtn);
 
   function render() {
+    if (flight) {
+      const p = Math.min(1, (performance.now() - flight.start) / 600);
+      const q = p < 0.5 ? 4 * p ** 3 : 1 - ((-2 * p + 2) ** 3) / 2;
+      camera.position.lerpVectors(flight.from, flight.end, q);
+      controls.target.lerpVectors(flight.targetFrom, flight.target, q);
+      if (p === 1) flight = null;
+    }
     controls.update();
     renderer.render(scene, camera);
     updateGizmo();
     updateLabels();
   }
 
-  return { THREE, renderer, scene, camera, controls, toWorld, pinLabel, render, fit, box };
+  return { THREE, renderer, scene, camera, controls, toWorld, pinLabel, render, fit, flyTo, box, resetBtn };
 }

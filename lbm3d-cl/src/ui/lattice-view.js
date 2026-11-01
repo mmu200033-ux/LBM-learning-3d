@@ -1,239 +1,94 @@
-// 3D lattice view: solid voxels revealed in reconstruction order, pore nodes as dots,
-// a y-cutaway that follows the selected node, and the selected node's D3Q7 arrows.
+import * as THREE from 'three';
 import { createStage } from './stage.js';
 import { PHASE, PHASE_COLOR, tauColor } from './palette.js';
-import { neighborStatus } from './neighbors.js';
+import { createClipBox, clipPlanes, insideClip } from './clip-box.js';
+import { createBlockView } from './block-view.js';
 
-const DIRS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
-const SOLIDISH = new Set([PHASE.IONOMER, PHASE.CARBON, PHASE.PT]);
-const STATUS = { flow: { color: '#1f7a72' }, bounce: { color: '#c8683a' }, conj: { color: '#4a8fd4' }, wall: { color: '#1a1a1a' } };
+export function createLatticeView(canvas, overlay, structure, solver) {
+  const { L,H,W,phase,order } = structure, N=L*H*W;
+  const stage=createStage(canvas,overlay,structure);
+  const { scene,renderer,toWorld,camera }=stage;
+  renderer.localClippingEnabled=true;
+  const center=new THREE.Vector3((L-1)/2,(H-1)/2,(W-1)/2);
+  const coord=i=>[i%L,Math.floor(i/L)%H,Math.floor(i/(L*H))];
+  const solidList=Array.from({length:N},(_,i)=>i).filter(i=>phase[i]>=PHASE.IONOMER&&phase[i]<=PHASE.PT).sort((a,b)=>order[a]-order[b]);
+  const solidMat=new THREE.MeshLambertMaterial({transparent:true,opacity:1});
+  const solidMesh=new THREE.InstancedMesh(new THREE.BoxGeometry(0.94,0.94,0.94),solidMat,solidList.length);
+  const matrix=new THREE.Matrix4(), color=new THREE.Color();
+  solidList.forEach((i,n)=>{const p=toWorld(...coord(i));matrix.makeTranslation(p.x,p.y,p.z);solidMesh.setMatrixAt(n,matrix);solidMesh.setColorAt(n,color.setHex(PHASE_COLOR[phase[i]]));});
+  solidMesh.instanceMatrix.needsUpdate=true; solidMesh.instanceColor.needsUpdate=true; scene.add(solidMesh);
 
-export function createLatticeView(canvas, overlay, structure) {
-  const { L, H, W, phase, order } = structure;
-  const N = L * H * W;
-  const idx = (x, y, z) => x + L * (y + H * z);
-  const cx = i => i % L, cy = i => Math.floor(i / L) % H, cz = i => Math.floor(i / (L * H));
-  const stage = createStage(canvas, overlay, { L, H, W });
-  const { THREE, scene, toWorld, pinLabel } = stage;
-
-  let cutY = 0;
-  let threshold = 0;          // nodes with order < threshold are revealed
-  let tauArr = null;
-
-  // ---- Solid voxels (ionomer / carbon / Pt) ----
-  const solidMesh = new THREE.InstancedMesh(
-    new THREE.BoxGeometry(0.94, 0.94, 0.94),
-    new THREE.MeshLambertMaterial(),
-    N
-  );
-  solidMesh.count = 0;
-  scene.add(solidMesh);
-  let solidList = [];         // node indices, sorted by order, filtered by cut
-  let solidOrders = [];
-
-  // ---- Node dots (anything not yet solid) ----
-  const dotPos = new Float32Array(N * 3), dotCol = new Float32Array(N * 3);
-  const dotGeo = new THREE.BufferGeometry();
-  dotGeo.setAttribute('position', new THREE.BufferAttribute(dotPos, 3));
-  dotGeo.setAttribute('color', new THREE.BufferAttribute(dotCol, 3));
-  const dots = new THREE.Points(dotGeo, new THREE.PointsMaterial({
-    size: 0.22, vertexColors: true, sizeAttenuation: true,
-  }));
-  scene.add(dots);
-  let dotList = [];           // sorted by order descending (never-solid nodes first)
-  let dotOrders = [];
-
-  // ---- Buffer slabs and walls ----
-  const bl = 3;
-  const slabMat = new THREE.MeshLambertMaterial({ color: PHASE_COLOR[PHASE.BUFFER], transparent: true, opacity: 0.28, depthWrite: false });
-  const wallMat = new THREE.MeshLambertMaterial({ color: 0x2a2f31, transparent: true, opacity: 0.55, depthWrite: false });
-  const slabs = new THREE.Group();
-  for (const side of [0, 1]) {
-    const slab = new THREE.Mesh(new THREE.BoxGeometry(bl - 1, H, W), slabMat);
-    slab.position.copy(toWorld(side ? L - bl + (bl - 2) / 2 : 1 + (bl - 2) / 2, (H - 1) / 2, (W - 1) / 2));
-    const wall = new THREE.Mesh(new THREE.BoxGeometry(1, H, W), wallMat);
-    wall.position.copy(toWorld(side ? L - 1 : 0, (H - 1) / 2, (W - 1) / 2));
-    slabs.add(slab, wall);
+  // Every lattice site starts as a point, including future buffers and walls.
+  const dotKey=i=>order[i]<0?Infinity:order[i];
+  const dotList=Array.from({length:N},(_,i)=>i).sort((a,b)=>dotKey(b)-dotKey(a));
+  const positions=new Float32Array(N*3), colors=new Float32Array(N*3);
+  dotList.forEach((i,n)=>{const p=toWorld(...coord(i));positions.set([p.x,p.y,p.z],n*3);});
+  const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.BufferAttribute(positions,3));geo.setAttribute('color',new THREE.BufferAttribute(colors,3));
+  const pointMat=new THREE.PointsMaterial({size:0.22,sizeAttenuation:true,vertexColors:true,transparent:true,opacity:0.55});
+  const points=new THREE.Points(geo,pointMat);scene.add(points);
+  const slabMat=new THREE.MeshLambertMaterial({color:PHASE_COLOR[PHASE.BUFFER],transparent:true,opacity:0.28,depthWrite:false});
+  const wallMat=new THREE.MeshLambertMaterial({color:PHASE_COLOR[PHASE.WALL],transparent:true,opacity:0.55,depthWrite:false});
+  const slabs=new THREE.Group();
+  for(const side of [0,1]){
+    const slab=new THREE.Mesh(new THREE.BoxGeometry(2,H,W),slabMat);slab.position.copy(toWorld(side?L-2.5:1.5,center.y,center.z));
+    const wall=new THREE.Mesh(new THREE.BoxGeometry(1,H,W),wallMat);wall.position.copy(toWorld(side?L-1:0,center.y,center.z));slabs.add(slab,wall);
   }
-  slabs.visible = false;
   scene.add(slabs);
-  const bufferStage = structure.stages.find(s => s.name === 'buffer-wall');
-
-  // ---- Cut plane outline ----
-  const cutFrame = new THREE.LineSegments(
-    new THREE.EdgesGeometry(new THREE.PlaneGeometry(L, W)),
-    new THREE.LineBasicMaterial({ color: 0xc99a2e, transparent: true, opacity: 0.6 })
-  );
-  cutFrame.rotation.x = Math.PI / 2;
-  scene.add(cutFrame);
-
-  const col = new THREE.Color(), mat = new THREE.Matrix4();
-  const lower = (arr, v) => { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; arr[m] < v ? lo = m + 1 : hi = m; } return lo; };
-
-  function rebuild() {
-    solidList = [];
-    dotList = [];
-    for (let i = 0; i < N; i++) {
-      if (cy(i) < cutY) continue;
-      const p = phase[i];
-      if (SOLIDISH.has(p)) solidList.push(i);
-      // 只在切面和外表面画格点，避免内部点阵叠出摩尔纹
-      const x = cx(i), y = cy(i), z = cz(i);
-      const onShell = y === cutY || y === H - 1 || z === 0 || z === W - 1 || x === 3 || x === L - 4;
-      if (onShell && p !== PHASE.BUFFER && p !== PHASE.WALL) dotList.push(i);
-    }
-    solidList.sort((a, b) => order[a] - order[b]);
-    solidOrders = solidList.map(i => order[i]);
-    // dots: never-solid first (order -1 → treated as +inf), then by order descending
-    const key = i => (SOLIDISH.has(phase[i]) ? order[i] : Infinity);
-    dotList.sort((a, b) => key(b) - key(a));
-    dotOrders = dotList.map(i => -key(i));   // ascending
-
-    for (let k = 0; k < solidList.length; k++) {
-      const i = solidList[k];
-      mat.makeTranslation(toWorld(cx(i), cy(i), cz(i)));
-      solidMesh.setMatrixAt(k, mat);
-      col.setHex(PHASE_COLOR[phase[i]]);
-      solidMesh.setColorAt(k, col);
-    }
-    solidMesh.instanceMatrix.needsUpdate = true;
-    if (solidMesh.instanceColor) solidMesh.instanceColor.needsUpdate = true;
-
-    for (let k = 0; k < dotList.length; k++) {
-      const i = dotList[k];
-      const v = toWorld(cx(i), cy(i), cz(i));
-      dotPos.set([v.x, v.y, v.z], k * 3);
-    }
-    dotGeo.attributes.position.needsUpdate = true;
-    colorDots();
-
-    cutFrame.position.set(0, cutY - (H - 1) / 2 - 0.5, 0);
-    pickPlane.constant = -(cutY - (H - 1) / 2 - 0.5);
-    applyThreshold();
+  const frame=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1,1,1)),new THREE.LineDashedMaterial({color:0xc99a2e,dashSize:0.6,gapSize:0.4}));scene.add(frame);
+  const selectedBox=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1.06,1.06,1.06)),new THREE.LineBasicMaterial({color:0xc99a2e,depthTest:false}));selectedBox.renderOrder=10;scene.add(selectedBox);
+  const block=createBlockView(stage,structure,solver);
+  let threshold=0,mode='build',cameraMode='global',tau=null,selection={x:8,y:16,z:16},onPick=null;
+  let clip={enabled:true,x0:0,x1:L-1,y0:Math.floor(H/2),y1:H-1,z0:0,z1:W-1};
+  const clipControl=createClipBox(overlay.querySelector('#clip-controls'),structure,next=>{clip=next;applyClipping();});
+  function applyClipping(){
+    const planes=mode==='build'?clipPlanes(clip,center):[];
+    for(const material of [solidMat,pointMat,slabMat,wallMat]){material.clippingPlanes=planes;material.needsUpdate=true;}
+    const geometry=new THREE.EdgesGeometry(new THREE.BoxGeometry(clip.x1-clip.x0+1,clip.y1-clip.y0+1,clip.z1-clip.z0+1));
+    frame.geometry.dispose();frame.geometry=geometry;frame.position.copy(toWorld((clip.x0+clip.x1)/2,(clip.y0+clip.y1)/2,(clip.z0+clip.z1)/2));frame.computeLineDistances();
+    frame.visible=mode==='build'&&clip.enabled;
   }
-
-  function colorDots() {
-    for (let k = 0; k < dotList.length; k++) {
-      const i = dotList[k];
-      let r = 0.55, g = 0.6, b = 0.58;
-      if (tauArr && phase[i] === PHASE.PORE) {
-        const c = tauColor((tauArr[i] - 0.5) / 1.4);
-        r = c[0] / 255; g = c[1] / 255; b = c[2] / 255;
-      }
-      dotCol.set([r, g, b], k * 3);
-    }
-    dotGeo.attributes.color.needsUpdate = true;
-    dots.material.size = tauArr ? 0.5 : 0.32;
+  const lower=(list,pred)=>{let lo=0,hi=list.length;while(lo<hi){const m=(lo+hi)>>1;if(pred(list[m]))lo=m+1;else hi=m;}return lo;};
+  function setRevealOrder(value){
+    threshold=value;solidMesh.count=lower(solidList,i=>order[i]<value);geo.setDrawRange(0,lower(dotList,i=>dotKey(i)>=value));
+    slabs.visible=value>(structure.stages.find(s=>s.name==='buffer-wall')?.start??Infinity);
   }
-
-  function applyThreshold() {
-    solidMesh.count = lower(solidOrders, threshold);
-    // dots visible while order >= threshold  ⇔  -order <= -threshold
-    let n = dotOrders.length;
-    let lo = 0, hi = n;
-    while (lo < hi) { const m = (lo + hi) >> 1; dotOrders[m] <= -threshold ? lo = m + 1 : hi = m; }
-    dotGeo.setDrawRange(0, lo);
-    slabs.visible = bufferStage && threshold > bufferStage.start;
+  function setTau(value){
+    tau=value;overlay.querySelector('#tau-legend').hidden=!value;pointMat.size=value?0.4:0.22;
+    dotList.forEach((i,n)=>{if(value&&phase[i]===PHASE.PORE){const rgb=tauColor((value[i]-0.5)/1.4);color.setRGB(...rgb.map(v=>v/255),THREE.SRGBColorSpace);}else color.set('#8e9a96');colors.set([color.r,color.g,color.b],n*3);});geo.attributes.color.needsUpdate=true;
   }
+  function background(){
+    const local=mode==='step'&&cameraMode==='block';solidMat.opacity=local?0.08:1;solidMat.depthWrite=!local;slabMat.opacity=local?0.08:0.28;wallMat.opacity=local?0.08:0.55;points.visible=!local;
+    selectedBox.visible=mode==='build';block.setVisible(mode==='step');
+  }
+  function setCameraMode(value,immediate=false){
+    cameraMode=value;
+    if(value==='block'){const target=block.target();const distance=7/(2*Math.tan(THREE.MathUtils.degToRad(camera.fov/2))*0.7);stage.flyTo(target,distance,immediate);}else stage.fit();
+    overlay.querySelector('#camera-toggle').dataset.camera=value;background();
+  }
+  function setSelection(x,y,z,{fly=true,immediate=false}={}){
+    selection={x,y,z};selectedBox.position.copy(toWorld(x,y,z));block.setSelection(selection);
+    if(mode==='step'&&fly&&cameraMode==='block')setCameraMode('block',immediate);
+  }
+  function setMode(value,{immediate=false}={}){
+    mode=value;overlay.querySelector('#clip-controls').hidden=value!=='build';overlay.querySelector('#camera-toggle').hidden=value!=='step';
+    if(value==='step'){setRevealOrder(Infinity);setTau(null);setCameraMode('block',immediate);}else{setCameraMode('global',immediate);}
+    applyClipping();background();
+  }
+  stage.resetBtn.addEventListener('click',()=>{if(mode==='step'&&cameraMode==='block')setCameraMode('block');});
+  overlay.querySelector('#camera-toggle').addEventListener('click',()=>setCameraMode(cameraMode==='global'?'block':'global'));
 
-  function setRevealOrder(th) { if (th !== threshold) { threshold = th; applyThreshold(); } }
-  function setCut(y) { y = Math.max(0, Math.min(H - 1, y)); if (y !== cutY) { cutY = y; rebuild(); } }
-  function setTau(arr) { tauArr = arr; colorDots(); }
-
-  // ---- Selection marker and D3Q7 arrows ----
-  const sel = new THREE.Group();
-  sel.renderOrder = 10;
-  const selBox = new THREE.LineSegments(
-    new THREE.EdgesGeometry(new THREE.BoxGeometry(1.08, 1.08, 1.08)),
-    new THREE.LineBasicMaterial({ color: 0xc99a2e, depthTest: false, transparent: true })
-  );
-  sel.add(selBox);
-  const shaftGeo = new THREE.CylinderGeometry(0.045, 0.045, 0.72, 10).translate(0, 0.36, 0);
-  const tipGeo = new THREE.ConeGeometry(0.13, 0.26, 12).translate(0, 0.85, 0);
-  const arrows = DIRS.map(d => {
-    const m = new THREE.MeshBasicMaterial({ color: STATUS.flow.color, depthTest: false, transparent: true });
-    const g = new THREE.Group();
-    g.add(new THREE.Mesh(shaftGeo, m), new THREE.Mesh(tipGeo, m));
-    g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...d));
-    g.userData.mat = m;
-    sel.add(g);
-    return g;
+  const raycaster=new THREE.Raycaster();raycaster.params.Points.threshold=0.4;const ndc=new THREE.Vector2();let down=null;
+  canvas.addEventListener('pointerdown',e=>{down=[e.clientX,e.clientY];});
+  canvas.addEventListener('pointerup',e=>{
+    if(!down||Math.hypot(e.clientX-down[0],e.clientY-down[1])>4)return;down=null;
+    const rect=canvas.getBoundingClientRect();ndc.set((e.clientX-rect.left)/rect.width*2-1,-(e.clientY-rect.top)/rect.height*2+1);raycaster.setFromCamera(ndc,camera);
+    if(mode==='step'){const node=block.pick(raycaster);if(node){onPick?.(node.x,node.y,node.z);return;}}
+    const hits=raycaster.intersectObjects([solidMesh,...(points.visible?[points]:[])]);
+    for(const hit of hits){const i=hit.object===solidMesh?solidList[hit.instanceId]:dotList[hit.index];if(i===undefined)continue;const xyz=coord(i);if(mode==='build'&&!insideClip(clip,...xyz))continue;onPick?.(...xyz);break;}
   });
-  const packetGeo = new THREE.SphereGeometry(0.11, 12, 8);
-  const packets = DIRS.map(() => {
-    const m = new THREE.Mesh(packetGeo, new THREE.MeshBasicMaterial({ color: 0x1f7a72, depthTest: false, transparent: true }));
-    m.visible = false;
-    sel.add(m);
-    return m;
-  });
-  const core = new THREE.Mesh(new THREE.SphereGeometry(0.16, 16, 12),
-    new THREE.MeshBasicMaterial({ color: 0xc99a2e, depthTest: false, transparent: true }));
-  sel.add(core);
-  sel.traverse(o => { o.renderOrder = 10; });
-  scene.add(sel);
-
-  let selNode = null, status = [];
-  function setSelection(x, y, z) {
-    selNode = { x, y, z };
-    sel.position.copy(toWorld(x, y, z));
-    status = DIRS.map(([dx, dy, dz]) => neighborStatus(structure, x, y, z, dx, dy, dz));
-    arrows.forEach((a, k) => a.userData.mat.color.set(STATUS[status[k]].color));
-    setCut(y);
-  }
-
-  // Substep animation for the selected node. p in [0,1]; substep null = idle.
-  function animate(substep, p) {
-    const ease = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
-    packets.forEach((m, k) => {
-      m.visible = false;
-      const d = DIRS[k], st = status[k];
-      if (substep === 'stream') {
-        m.visible = true;
-        const blocked = st === 'bounce' || st === 'wall';
-        const reach = blocked ? 0.5 : 1;
-        m.position.set(d[0] * reach * ease, d[1] * reach * ease, d[2] * reach * ease);
-        m.material.color.set(st === 'conj' ? STATUS.conj.color : STATUS.flow.color);
-      } else if (substep === 'bounce' && (st === 'bounce' || st === 'wall')) {
-        m.visible = true;
-        const s = 0.5 * (1 - ease);
-        m.position.set(d[0] * s, d[1] * s, d[2] * s);
-        m.material.color.set(STATUS.bounce.color);
-      }
-    });
-    const pulse = substep === 'collide' || substep === 'macro' || substep === 'reaction'
-      ? 1 + 0.6 * Math.sin(Math.PI * p) : 1;
-    core.scale.setScalar(pulse);
-    core.material.color.set(substep === 'reaction' ? 0xc8683a : 0xc99a2e);
-    arrows.forEach((a, k) => {
-      const lit = substep === 'stream' || (substep === 'bounce' && (status[k] === 'bounce' || status[k] === 'wall'));
-      a.userData.mat.opacity = substep && !lit ? 0.35 : 1;
-    });
-  }
-  function setArrowsVisible(v) { arrows.forEach(a => { a.visible = v; }); }
-
-  // ---- Picking on the cut face ----
-  const pickPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-  const raycaster = new THREE.Raycaster(), ndc = new THREE.Vector2(), hit = new THREE.Vector3();
-  let down = null, onPick = null;
-  canvas.addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; });
-  canvas.addEventListener('pointerup', e => {
-    if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;
-    const r = canvas.getBoundingClientRect();
-    ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
-    raycaster.setFromCamera(ndc, stage.camera);
-    if (!raycaster.ray.intersectPlane(pickPlane, hit)) return;
-    const x = Math.round(hit.x + (L - 1) / 2), z = Math.round(hit.z + (W - 1) / 2);
-    if (x >= 0 && x < L && z >= 0 && z < W) onPick?.(x, cutY, z);
-  });
-
-  pinLabel(overlay.querySelector('.inlet-label'), toWorld(-1.5, (H - 1) / 2, W + 1));
-  pinLabel(overlay.querySelector('.outlet-label'), toWorld(L + 0.5, (H - 1) / 2, W + 1));
-
-  rebuild();
-
-  return {
-    camera: stage.camera, controls: stage.controls,
-    render: stage.render, setRevealOrder, setCut, setTau, setSelection, animate, setArrowsVisible,
-    onPick: f => { onPick = f; },
-  };
+  stage.pinLabel(overlay.querySelector('.inlet-label'),toWorld(-1.5,center.y,W+1));stage.pinLabel(overlay.querySelector('.outlet-label'),toWorld(L+0.5,center.y,W+1));
+  setTau(null);setRevealOrder(0);applyClipping();block.setVisible(false);
+  return { camera,controls:stage.controls,renderer,block,clipControl,setRevealOrder,setTau,setSelection,setMode,setCameraMode,
+    render:stage.render,onPick:callback=>{onPick=callback;},
+    stats:()=>({totalSites:N,points:geo.drawRange.count,solids:solidMesh.count,clip:{...clip},mode,camera:cameraMode,tau:!!tau,block:block.stats()}) };
 }
