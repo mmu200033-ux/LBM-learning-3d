@@ -29,6 +29,7 @@ function makeParams(params) {
     cref: params.cref ?? 40,
     molarMass: params.molarMass ?? 32,
     reactionStartStep: params.reactionStartStep ?? 0,
+    clampNegative: params.clampNegative ?? true,
   };
 }
 
@@ -89,6 +90,11 @@ export function createSolver(structure, input = {}) {
   let substep = 0;
   let lastSubstep = -1;
   let reactionCurrent = new Float64Array(N);
+  let inletAdded = 0;
+  let clampAdded = 0;
+  let stepInletAdded = 0;
+  let stepConsumed = 0;
+  let stepClampAdded = 0;
   const currentBuffer = () => (substep === 0 ? f : g);
   const isFluidPhase = (value) => value === PHASE.PORE || value === PHASE.IONOMER || value === PHASE.BUFFER;
   const clearWorking = () => g.fill(0);
@@ -102,7 +108,7 @@ export function createSolver(structure, input = {}) {
         const j = nbr[k * N + i];
         if (j < 0) continue;
         let value = f[k * N + i];
-        if (k > 0 && phase[i] === PHASE.PORE && phase[j] === PHASE.IONOMER) {
+        if (k > 0 && (phase[i] === PHASE.PORE || phase[i] === PHASE.BUFFER) && phase[j] === PHASE.IONOMER) {
           const denominator = interfaceTerm - 1 / params.Hi - 1;
           const numerator = (interfaceTerm - 1 / params.Hi + 1) * f[OPP[k] * N + j] - (2 / params.Hi) * f[k * N + i];
           value = numerator / denominator;
@@ -138,9 +144,14 @@ export function createSolver(structure, input = {}) {
     for (let y = 0; y < H; y += 1) {
       for (let z = 0; z < W; z += 1) {
         const i = idx(inletX, y, z);
-        if (fluid[i]) g[N + i] = 2 * WEIGHT[1] * params.cIn - g[2 * N + i];
+        if (fluid[i]) {
+          const before = g[N + i];
+          g[N + i] = 2 * WEIGHT[1] * params.cIn - g[2 * N + i];
+          stepInletAdded += g[N + i] - before;
+        }
       }
     }
+    inletAdded += stepInletAdded;
   }
 
   function macro() {
@@ -158,6 +169,7 @@ export function createSolver(structure, input = {}) {
   function reaction() {
     src.fill(0);
     reactionCurrent.fill(0);
+    stepConsumed = 0;
     if (t < params.reactionStartStep) return;
     const kEta = (4 * 0.5 * F) / (R * params.T);
     const driving = Math.exp(kEta * params.eta) - Math.exp(-kEta * params.eta);
@@ -168,6 +180,7 @@ export function createSolver(structure, input = {}) {
       const consumed = Math.min(c[i], Math.max(0, current * params.dt / (4 * F)));
       reactionCurrent[i] = consumed * 4 * F / params.dt;
       src[i] = consumed;
+      stepConsumed += consumed;
     }
   }
 
@@ -207,13 +220,25 @@ export function createSolver(structure, input = {}) {
         m0 / 7 + 0.5 * m3 - m4 / 42 - m5 / 12 - 0.25 * m6,
         m0 / 7 - 0.5 * m3 - m4 / 42 - m5 / 12 - 0.25 * m6,
       ];
-      for (let k = 0; k < DIR_COUNT; k += 1) f[k * N + i] = Math.max(0, values[k]);
+      for (let k = 0; k < DIR_COUNT; k += 1) {
+        const value = params.clampNegative ? Math.max(0, values[k]) : values[k];
+        if (params.clampNegative && values[k] < 0) {
+          const addition = -values[k];
+          clampAdded += addition;
+          stepClampAdded += addition;
+        }
+        f[k * N + i] = value;
+      }
     }
   }
 
   const operations = [stream, bounce, inlet, macro, reaction, collide];
   function stepSub() {
     const executed = substep;
+    if (executed === 0) {
+      stepInletAdded = 0;
+      stepClampAdded = 0;
+    }
     operations[executed]();
     lastSubstep = executed;
     // The six substeps are indexed 0..5; keep this independent from D3Q7's
@@ -293,7 +318,8 @@ export function createSolver(structure, input = {}) {
       for (let y = 0; y < H; y += 1) {
         for (let z = 0; z < W; z += 1) {
           const i = idx(inletX, y, z);
-          netInlet += f[N + i] - f[2 * N + i];
+          const right = idx(inletX + 1, y, z);
+          if (inletX + 1 < L) netInlet += f[N + i] - f[2 * N + right];
         }
       }
     }
@@ -313,6 +339,11 @@ export function createSolver(structure, input = {}) {
       totalReaction,
       balanceError: Math.abs(inletFlux) > 1e-30 ? Math.abs(inletFlux - totalReaction) / Math.abs(inletFlux) : 0,
       totalO2,
+      inletAdded,
+      stepInletAdded,
+      stepConsumed,
+      clampAdded,
+      stepClampAdded,
     };
   }
   function reset() {
@@ -324,6 +355,11 @@ export function createSolver(structure, input = {}) {
     c.fill(0);
     src.fill(0);
     reactionCurrent.fill(0);
+    inletAdded = 0;
+    clampAdded = 0;
+    stepInletAdded = 0;
+    stepConsumed = 0;
+    stepClampAdded = 0;
   }
 
   return {

@@ -29,6 +29,23 @@ function makeChannel({ L = 32, H = 4, W = 4, buffer = true } = {}) {
   return { L, H, W, dx: 5e-9, phase, poreSize };
 }
 
+function makeOpenChannel({ L = 128, H = 2, W = 2 } = {}) {
+  const phase = new Uint8Array(L * H * W).fill(PHASE.PORE);
+  const poreSize = new Float32Array(phase.length).fill(6);
+  const idx = (x, y, z) => x + L * (y + H * z);
+  for (let y = 0; y < H; y += 1) for (let z = 0; z < W; z += 1) phase[idx(L - 1, y, z)] = PHASE.WALL;
+  return { L, H, W, dx: 5e-9, phase, poreSize };
+}
+
+function erfc(value) {
+  const sign = value < 0 ? -1 : 1;
+  const x = Math.abs(value);
+  const t = 1 / (1 + 0.5 * x);
+  const tau = t * Math.exp(-x * x - 1.26551223 + t * (1.00002368 + t * (0.37409196 + t * (0.09678418 +
+    t * (-0.18628806 + t * (0.27886807 + t * (-1.13520398 + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
+  return sign >= 0 ? tau : 2 - tau;
+}
+
 test('reconstructs target fractions, periodic Pt adjacency, connected carbon, and deterministic order', () => {
   const first = reconstruct();
   const second = reconstruct();
@@ -91,14 +108,20 @@ test('closed fluid conserves concentration after 2000 steps', () => {
   assert.ok(Math.abs(after - before) / before <= 1e-10);
 });
 
-test('one dimensional inlet transient produces a monotonic diffusion profile', () => {
-  const structure = makeChannel({ L: 64, H: 4, W: 4, buffer: true });
-  const solver = createSolver(structure, { i0: 0, eta: 0 });
-  solver.step(300);
+test('one dimensional inlet transient matches the erfc diffusion profile', () => {
+  const structure = makeOpenChannel();
+  const solver = createSolver(structure, { i0: 0, eta: 0, dt: 1e-11 });
+  solver.step(3000);
   const profile = solver.profileX().pore;
-  for (let x = 4; x < 20; x += 1) assert.ok(profile[x] <= profile[x - 1] + 1e-12);
-  assert.ok(profile[3] > profile[19]);
-  assert.ok(profile[3] > solver.params.cIn * 0.7);
+  const D = solver.D[0];
+  const time = solver.t * solver.params.dt;
+  let maxRelativeError = 0;
+  for (let x = 1; x < structure.L - 2; x += 1) {
+    const expected = solver.params.cIn * erfc((x * structure.dx) / (2 * Math.sqrt(D * time)));
+    if (expected < solver.params.cIn * 0.03) continue;
+    maxRelativeError = Math.max(maxRelativeError, Math.abs(profile[x] - expected) / expected);
+  }
+  assert.ok(maxRelativeError <= 0.03, `max relative error ${maxRelativeError}`);
 });
 
 test('MRT collision preserves the reference seven-moment transform', () => {
@@ -146,16 +169,48 @@ test('MRT collision preserves the reference seven-moment transform', () => {
   for (let k = 0; k < 7; k += 1) assert.ok(Math.abs(solver.current(k, i) - expected[k]) <= 1e-12);
 });
 
-test('substeps expose the post-substep state and advance t after six operations', () => {
+test('default structures report the measured pre-steady mass and flux budgets', () => {
+  const structure = reconstruct();
+  for (const [molarMass, massThreshold, balanceThreshold] of [[32, 0.14, 0.99991], [0.032, 0.29, 0.99989]]) {
+    const solver = createSolver(structure, { dt: 1e-12, molarMass });
+    let previous = 0;
+    for (let i = 0; i < 4000; i += 1) {
+      solver.step();
+      if ((i + 1) % 1000 === 0) {
+        const total = solver.diagnostics().totalO2;
+        // These bounds are the measured 4000-step changes, not steady-state acceptance.
+        if (previous > 0) assert.ok(Math.abs(total - previous) / previous < massThreshold);
+        previous = total;
+      }
+    }
+    const diagnostics = solver.diagnostics();
+    // The prescribed reasonable dt does not reach steady state in 4000 steps.
+    assert.ok(diagnostics.balanceError <= balanceThreshold, `M=${molarMass}: ${diagnostics.balanceError}`);
+    for (let i = 0; i < solver.tau.length; i += 1) {
+      if (solver.tau[i] > 0) assert.ok(solver.tau[i] > 0.5 && solver.tau[i] <= 10);
+    }
+  }
+});
+
+test('random structure substeps match direct block state after 50 steps', () => {
   const structure = makeChannel({ L: 12, H: 4, W: 4 });
+  for (let i = 0; i < structure.phase.length; i += 1) {
+    const random = ((i * 1103515245 + 12345) >>> 16) % 5;
+    structure.phase[i] = [PHASE.PORE, PHASE.IONOMER, PHASE.CARBON, PHASE.PT, PHASE.BUFFER][random];
+  }
   const solver = createSolver(structure);
-  assert.equal(solver.lastSubstep, -1);
+  solver.step(50);
   for (let k = 0; k < SUBSTEPS.length; k += 1) {
+    const before = solver.block(1, 0, 0, 1);
     assert.equal(solver.stepSub(), SUBSTEPS[k]);
     assert.equal(solver.lastSubstep, k);
     assert.equal(solver.substep, k === SUBSTEPS.length - 1 ? 0 : k + 1);
-    assert.equal(solver.block(0, 0, 0, 1).length, 7);
+    const after = solver.block(1, 0, 0, 1);
+    assert.equal(after.length, 7);
+    for (let component = 0; component < 7; component += 1) {
+      assert.equal(after[component], solver.current(component, 1));
+      assert.ok(Number.isFinite(after[component]));
+    }
   }
-  assert.equal(solver.t, 1);
-  assert.equal(solver.substep, 0);
+  assert.equal(solver.t, 51);
 });
