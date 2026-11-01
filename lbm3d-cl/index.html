@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>催化层氧气传输 · 三维 LBM 演示</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<header>
+  <div class="header-left">
+    <h1>催化层氧气传输 · 三维 LBM 演示</h1>
+    <p class="subtitle">D3Q7 多松弛时间格子玻尔兹曼方法 · 李兴博士论文第 2 章</p>
+  </div>
+  <div class="header-right">
+    <span class="badge">原型数据</span>
+    <label>种子 <input type="number" id="seed" value="42" min="1" step="1"></label>
+    <button id="regen">重新生成</button>
+  </div>
+</header>
+
+<main>
+  <div class="panel" id="panel-lattice">
+    <div class="panel-header">
+      <span class="panel-index">01</span>
+      <h2>三维格点</h2>
+      <div class="mode-switch">
+        <button class="mode-btn active" data-mode="build">构建</button>
+        <button class="mode-btn" data-mode="step">时间步</button>
+      </div>
+      <div class="grid-info"></div>
+    </div>
+    <div class="canvas-wrap">
+      <canvas id="lattice-canvas"></canvas>
+      <div class="lattice-overlay">
+        <div class="legend">
+          <div class="legend-item"><span class="swatch pore"></span>孔隙</div>
+          <div class="legend-item"><span class="swatch ionomer"></span>离聚物</div>
+          <div class="legend-item"><span class="swatch carbon"></span>碳</div>
+          <div class="legend-item"><span class="swatch pt"></span>铂</div>
+          <div class="legend-item"><span class="swatch buffer"></span>缓冲层</div>
+        </div>
+        <div class="gizmo"></div>
+        <div class="label inlet-label">O₂ 入口 · 微孔层</div>
+        <div class="label outlet-label">质子交换膜</div>
+      </div>
+    </div>
+    <div class="controls">
+      <div class="stepper" id="stage-stepper"></div>
+      <div class="transport">
+        <button id="play" class="icon-btn">▶</button>
+        <button id="step" class="icon-btn">⏭</button>
+        <label class="speed-control">
+          速度 <input type="range" id="speed" min="0.1" max="3" step="0.1" value="1">
+          <span id="speed-val">1.0×</span>
+        </label>
+      </div>
+      <div class="caption"></div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-inspector">
+    <div class="panel-header">
+      <span class="panel-index">02</span>
+      <h2>七方向分布函数 (D3Q7)</h2>
+    </div>
+    <div class="inspector-content">
+      <div class="node-bar">
+        <label>选中格点
+          x <input type="number" class="coord-input" id="sel-x" min="0" max="63" value="8">
+          y <input type="number" class="coord-input" id="sel-y" min="0" max="31" value="16">
+          z <input type="number" class="coord-input" id="sel-z" min="0" max="31" value="16">
+        </label>
+        <span class="phase-tag"></span>
+      </div>
+      <div class="macro-row">
+        <div class="macro-item"><label>浓度</label><span id="macro-c">0.000</span><small>mol/m³</small></div>
+        <div class="macro-item"><label>τ</label><span id="macro-tau">0.500</span></div>
+        <div class="macro-item"><label>D</label><span id="macro-d">0.0</span><small>×10⁻⁶ m²/s</small></div>
+        <div class="macro-item"><label>源项</label><span id="macro-src">0.0</span><small>mol/(m³·s)</small></div>
+      </div>
+      <svg id="stencil" viewBox="0 0 400 280"></svg>
+      <table class="dist-table">
+        <thead>
+          <tr><th>方向</th><th>权重</th><th>当前值</th><th>状态</th></tr>
+        </thead>
+        <tbody id="dist-rows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-conc">
+    <div class="panel-header">
+      <span class="panel-index">03</span>
+      <h2>三维浓度可视化</h2>
+      <button id="run-toggle" class="run-btn">连续求解</button>
+    </div>
+    <div class="conc-wrap">
+      <div class="canvas-wrap">
+        <canvas id="conc-canvas"></canvas>
+        <div class="conc-overlay">
+          <div class="gizmo"></div>
+          <div class="label inlet-label">入口</div>
+          <div class="label outlet-label">出口</div>
+        </div>
+      </div>
+      <div class="profile-col">
+        <svg id="profile-chart" viewBox="0 0 340 240"></svg>
+        <div class="diagnostics">
+          <div class="diag-item"><label>时间步</label><span id="diag-step">0</span></div>
+          <div class="diag-item"><label>物理时间</label><span id="diag-time">0.00</span><small>ns</small></div>
+          <div class="diag-item"><label>入口通量</label><span id="diag-flux">0.00</span></div>
+          <div class="diag-item"><label>总反应消耗</label><span id="diag-rxn">0.00</span></div>
+          <div class="diag-item"><label>平衡误差</label><span id="diag-err">0.0</span><small>%</small></div>
+        </div>
+        <div class="colorbar">
+          <div class="colorbar-gradient"></div>
+          <div class="colorbar-labels">
+            <span>0.00</span>
+            <span>C</span>
+            <span id="colorbar-max">7.35</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="footer-info">
+    <span>网格 <strong id="footer-grid">64 × 32 × 32</strong></span>
+    <span>Δx = <strong>5 nm</strong></span>
+    <span>Δt = <strong id="footer-dt">2.5 ps</strong></span>
+    <span>η = <strong id="footer-eta">0.30 V</strong></span>
+    <span>边界 <strong>x=0 恒浓度 · x=L−1 零通量</strong></span>
+  </div>
+</footer>
+
+<script type="module" src="src/app.js"></script>
+</body>
+</html>

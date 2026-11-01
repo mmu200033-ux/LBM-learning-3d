@@ -4,3 +4,7 @@ test-output/.hello-verification/
 installers/
 
 DispatchDock/
+
+lbm3d-cl/reference/
+lbm3d-cl/out/
+.npm-cache/
