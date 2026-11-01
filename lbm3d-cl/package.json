@@ -1,0 +1,8 @@
+{
+  "name": "lbm3d-cl",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test"
+  }
+}
