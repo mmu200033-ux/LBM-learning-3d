@@ -44,7 +44,7 @@ export function createLatticeView(canvas, overlay, structure, solver) {
   const frame=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1,1,1)),new THREE.LineDashedMaterial({color:0xc99a2e,dashSize:0.6,gapSize:0.4}));scene.add(frame);
   const selectedBox=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1.06,1.06,1.06)),new THREE.LineBasicMaterial({color:0xc99a2e,depthTest:false}));selectedBox.renderOrder=10;scene.add(selectedBox);
   const block=createBlockView(stage,structure,solver);
-  let threshold=0,mode='build',cameraMode='global',tau=null,selection={x:8,y:16,z:16},onPick=null;
+  let threshold=0,mode='build',cameraMode='global',stepViewInitialized=false,initializeStepView=false,tau=null,selection={x:8,y:16,z:16},onPick=null;
   let clip={enabled:true,x0:0,x1:L-1,y0:Math.floor(H/2),y1:H-1,z0:0,z1:W-1};
   const stepPlane=new THREE.Plane(new THREE.Vector3(0,1,0),0);
   const clipControl=createClipBox(overlay.querySelector('#clip-controls'),structure,next=>{clip=next;applyClipping();});
@@ -73,22 +73,23 @@ export function createLatticeView(canvas, overlay, structure, solver) {
     const build=mode==='build';
     solidMesh.visible=build||mode==='step';blockSolidMesh.visible=mode==='step';points.visible=build;
     const bufferVisible=build&&threshold>(structure.stages.find(s=>s.name==='buffer-wall')?.start??Infinity);
-    slabs.visible=bufferVisible||mode==='step';
+    slabs.visible=bufferVisible;
     bufferSlabs.forEach(mesh=>{mesh.visible=bufferVisible;});
-    wallSlabs.forEach(mesh=>{mesh.visible=bufferVisible||mode==='step';});
+    wallSlabs.forEach(mesh=>{mesh.visible=bufferVisible;});
     stage.box.visible=build;selectedBox.visible=build;frame.visible=build&&clip.enabled;block.setVisible(!build);
     for(const el of overlay.querySelectorAll('.inlet-label,.outlet-label'))el.hidden=!build;
     for(const [i,el] of [...overlay.querySelectorAll('.legend-item')].entries())el.hidden=!build&&i!==0&&i!==2;
   }
-  function setCameraMode(value,immediate=false){
-    // Keep OrbitControls centered on the complete structure in every mode.
-    // The local block remains visible in place without taking over the orbit target.
-    cameraMode='global';
-    stage.fit();
-    background();
+  function setCameraMode(){
+    const local=mode==='step';
+    cameraMode=local?'local':'global';
+    const origin=blockOrigin(structure,selection);
+    const target=local?toWorld(origin.x+2,origin.y+2,origin.z+2):new THREE.Vector3();
+    stage.fit(target,local?0.45:null);
   }
   function setSelection(x,y,z,{fly=true,immediate=false}={}){
     selection={x,y,z};selectedBox.position.copy(toWorld(x,y,z));
+    if(initializeStepView){setCameraMode();stepViewInitialized=true;initializeStepView=false;}
     block.setSelection(selection);applyClipping();
     const origin=blockOrigin(structure,selection),matrix=new THREE.Matrix4(),scale=new THREE.Vector3();
     let innerCount=0;
@@ -98,20 +99,20 @@ export function createLatticeView(canvas, overlay, structure, solver) {
       if(inside){matrix.makeTranslation(world.x,world.y,world.z);blockSolidMesh.setMatrixAt(innerCount,matrix);blockSolidMesh.setColorAt(innerCount,color.setHex(PHASE_COLOR[phase[i]]));innerCount++;}
     });
     solidMesh.instanceMatrix.needsUpdate=true;blockSolidMesh.count=innerCount;blockSolidMesh.instanceMatrix.needsUpdate=true;if(blockSolidMesh.instanceColor)blockSolidMesh.instanceColor.needsUpdate=true;
-    // Selection changes move the teaching block, but the free camera keeps its
-    // target at the center of the complete structure.
   }
   function setMode(value,{immediate=false}={}){
     mode=value;overlay.querySelector('#clip-controls').hidden=value!=='build';
-    if(value==='step'){setTau(null);setRevealOrder(Infinity);setCameraMode('global',immediate);}else{setCameraMode('global',immediate);}
+    if(value==='step'){setTau(null);setRevealOrder(Infinity);if(!stepViewInitialized)initializeStepView=true;}
     applyClipping();background();
   }
-  stage.resetBtn.addEventListener('click',()=>setCameraMode('global'));
+  stage.resetBtn.addEventListener('click',setCameraMode);
 
   const raycaster=new THREE.Raycaster();raycaster.params.Points.threshold=0.4;const ndc=new THREE.Vector2();let down=null;
-  canvas.addEventListener('pointerdown',e=>{down=[e.clientX,e.clientY];});
+  canvas.addEventListener('contextmenu',e=>e.preventDefault());
+  canvas.addEventListener('pointerdown',e=>{down=e.button===0?[e.clientX,e.clientY]:null;});
   canvas.addEventListener('pointerup',e=>{
-    if(!down||Math.hypot(e.clientX-down[0],e.clientY-down[1])>4)return;down=null;
+    const start=down;down=null;
+    if(e.button!==0||!start||Math.hypot(e.clientX-start[0],e.clientY-start[1])>4)return;
     const rect=canvas.getBoundingClientRect();ndc.set((e.clientX-rect.left)/rect.width*2-1,-(e.clientY-rect.top)/rect.height*2+1);raycaster.setFromCamera(ndc,camera);
     if(mode==='step'){const node=block.pick(raycaster);if(node)onPick?.(node.x,node.y,node.z);return;}
     const hits=raycaster.intersectObjects([solidMesh,...(points.visible?[points]:[])]);

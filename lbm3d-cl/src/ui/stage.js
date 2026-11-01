@@ -11,9 +11,10 @@ export function createStage(canvas, overlay, { L, H, W }) {
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
   controls.dampingFactor = 0.12;
-  let flight = null;
-  controls.addEventListener('start', () => { flight = null; });
-
+  controls.screenSpacePanning = true;
+  controls.zoomToCursor = true;
+  controls.minDistance = 2;
+  controls.maxDistance = Math.hypot(L, H, W) * 4;
   scene.add(new THREE.AmbientLight(0xffffff, 0.62));
   const key = new THREE.DirectionalLight(0xffffff, 0.9);
   key.position.set(-0.6, -1, 1.3);
@@ -33,29 +34,25 @@ export function createStage(canvas, overlay, { L, H, W }) {
   );
   scene.add(box);
 
-  function fit() {
-    flight = null;
+  function fit(target = new THREE.Vector3(), heightFraction = null) {
     if (!canvas.clientWidth || !canvas.clientHeight) return;
-    const r = Math.hypot(L, H, W) * 0.5;
-    // 视场按宽高中较紧的一边算，让计算域占满画布
     const vFov = (camera.fov * Math.PI) / 180;
-    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
-    const fov = Math.min(vFov, hFov);
-    // Leave enough margin for the complete structure and the in-place teaching block.
-    const dist = (r / Math.sin(fov / 2)) * 0.92;
     const dir = new THREE.Vector3(0.32, -1, 0.5).normalize();
-    camera.position.copy(dir.multiplyScalar(dist));
-    controls.target.set(0, 0, 0);
-    controls.update();
-  }
-
-  function flyTo(target, distance, immediate = false) {
-    const end = target.clone().addScaledVector(new THREE.Vector3(0.32, -1, 0.5).normalize(), distance);
-    if (immediate) {
-      flight = null; controls.target.copy(target); camera.position.copy(end); controls.update();
+    let dist;
+    if (heightFraction) {
+      const screenUp = new THREE.Vector3(0, 0, 1).addScaledVector(dir, -dir.z).normalize();
+      const projectedHeight = 5 * (Math.abs(screenUp.x) + Math.abs(screenUp.y) + Math.abs(screenUp.z));
+      dist = projectedHeight / (2 * Math.tan(vFov / 2) * heightFraction);
     } else {
-      flight = { start: performance.now(), from: camera.position.clone(), targetFrom: controls.target.clone(), end, target: target.clone() };
+      const r = Math.hypot(L, H, W) * 0.5;
+      const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+      const fov = Math.min(vFov, hFov);
+      dist = (r / Math.sin(fov / 2)) * 0.92;
     }
+    camera.position.copy(dir.multiplyScalar(dist));
+    camera.position.add(target);
+    controls.target.copy(target);
+    controls.update();
   }
 
   function resize() {
@@ -111,22 +108,14 @@ export function createStage(canvas, overlay, { L, H, W }) {
   const resetBtn = document.createElement('button');
   resetBtn.className = 'reset-view';
   resetBtn.textContent = '重置视角';
-  resetBtn.addEventListener('click', fit);
   overlay.appendChild(resetBtn);
 
   function render() {
-    if (flight) {
-      const p = Math.min(1, (performance.now() - flight.start) / 600);
-      const q = p < 0.5 ? 4 * p ** 3 : 1 - ((-2 * p + 2) ** 3) / 2;
-      camera.position.lerpVectors(flight.from, flight.end, q);
-      controls.target.lerpVectors(flight.targetFrom, flight.target, q);
-      if (p === 1) flight = null;
-    }
     controls.update();
     renderer.render(scene, camera);
     updateGizmo();
     updateLabels();
   }
 
-  return { THREE, renderer, scene, camera, controls, toWorld, overlay, pinLabel, render, fit, flyTo, box, resetBtn };
+  return { THREE, renderer, scene, camera, controls, toWorld, overlay, pinLabel, render, fit, box, resetBtn };
 }
