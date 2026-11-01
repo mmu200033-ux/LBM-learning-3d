@@ -3,8 +3,9 @@ import { createStage } from './stage.js';
 import { PHASE, PHASE_COLOR, tauColor } from './palette.js';
 import { createClipBox, clipPlanes, insideClip } from './clip-box.js';
 import { createBlockView } from './block-view.js';
+import { TEACHING_ORIGIN, C_REF } from './teaching-lattice.js';
 
-export function createLatticeView(canvas, overlay, structure, solver) {
+export function createLatticeView(canvas, overlay, structure, solver, teaching) {
   const { L,H,W,phase,order } = structure, N=L*H*W;
   const stage=createStage(canvas,overlay,structure);
   const { scene,renderer,toWorld,camera }=stage;
@@ -36,7 +37,7 @@ export function createLatticeView(canvas, overlay, structure, solver) {
   scene.add(slabs);
   const frame=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1,1,1)),new THREE.LineDashedMaterial({color:0xc99a2e,dashSize:0.6,gapSize:0.4}));scene.add(frame);
   const selectedBox=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1.06,1.06,1.06)),new THREE.LineBasicMaterial({color:0xc99a2e,depthTest:false}));selectedBox.renderOrder=10;scene.add(selectedBox);
-  const block=createBlockView(stage,structure,solver);
+  const block=createBlockView(stage,teaching.structure,teaching.solver,{fixedOrigin:TEACHING_ORIGIN,cRef:C_REF,toWorld:(x,y,z)=>new THREE.Vector3(x-3,y-2,z-2)});
   let threshold=0,mode='build',cameraMode='global',tau=null,selection={x:8,y:16,z:16},onPick=null;
   let clip={enabled:true,x0:0,x1:L-1,y0:Math.floor(H/2),y1:H-1,z0:0,z1:W-1};
   const clipControl=createClipBox(overlay.querySelector('#clip-controls'),structure,next=>{clip=next;applyClipping();});
@@ -57,21 +58,23 @@ export function createLatticeView(canvas, overlay, structure, solver) {
     dotList.forEach((i,n)=>{if(value&&phase[i]===PHASE.PORE){const rgb=tauColor((value[i]-0.5)/1.4);color.setRGB(...rgb.map(v=>v/255),THREE.SRGBColorSpace);}else color.set('#8e9a96');colors.set([color.r,color.g,color.b],n*3);});geo.attributes.color.needsUpdate=true;
   }
   function background(){
-    const local=mode==='step'&&cameraMode==='block';solidMat.opacity=local?0.08:1;solidMat.depthWrite=!local;slabMat.opacity=local?0.08:0.28;wallMat.opacity=local?0.08:0.55;points.visible=!local;
-    selectedBox.visible=mode==='build';block.setVisible(mode==='step');
+    const build=mode==='build';
+    solidMesh.visible=build;points.visible=build;slabs.visible=build&&threshold>(structure.stages.find(s=>s.name==='buffer-wall')?.start??Infinity);
+    stage.box.visible=build;selectedBox.visible=build;frame.visible=build&&clip.enabled;block.setVisible(!build);
+    for(const el of overlay.querySelectorAll('.inlet-label,.outlet-label'))el.hidden=!build;
+    for(const [i,el] of [...overlay.querySelectorAll('.legend-item')].entries())el.hidden=!build&&i!==0&&i!==2;
   }
   function setCameraMode(value,immediate=false){
-    cameraMode=value;
-    if(value==='block'){const target=block.target();const distance=7/(2*Math.tan(THREE.MathUtils.degToRad(camera.fov/2))*0.7);stage.flyTo(target,distance,immediate);}else stage.fit();
+    cameraMode=mode==='step'?'block':value;
+    if(cameraMode==='block'){const target=block.target();const distance=7/(2*Math.tan(THREE.MathUtils.degToRad(camera.fov/2))*0.75);stage.flyTo(target,distance,immediate);}else stage.fit();
     overlay.querySelector('#camera-toggle').dataset.camera=value;background();
   }
   function setSelection(x,y,z,{fly=true,immediate=false}={}){
-    selection={x,y,z};selectedBox.position.copy(toWorld(x,y,z));block.setSelection(selection);
-    if(mode==='step'&&fly&&cameraMode==='block')setCameraMode('block',immediate);
+    selection={x,y,z};selectedBox.position.copy(toWorld(x,y,z));
   }
   function setMode(value,{immediate=false}={}){
-    mode=value;overlay.querySelector('#clip-controls').hidden=value!=='build';overlay.querySelector('#camera-toggle').hidden=value!=='step';
-    if(value==='step'){setRevealOrder(Infinity);setTau(null);setCameraMode('block',immediate);}else{setCameraMode('global',immediate);}
+    mode=value;overlay.querySelector('#clip-controls').hidden=value!=='build';overlay.querySelector('#camera-toggle').hidden=true;
+    if(value==='step'){setTau(null);setCameraMode('block',immediate);}else{setCameraMode('global',immediate);}
     applyClipping();background();
   }
   stage.resetBtn.addEventListener('click',()=>{if(mode==='step'&&cameraMode==='block')setCameraMode('block');});
@@ -82,7 +85,7 @@ export function createLatticeView(canvas, overlay, structure, solver) {
   canvas.addEventListener('pointerup',e=>{
     if(!down||Math.hypot(e.clientX-down[0],e.clientY-down[1])>4)return;down=null;
     const rect=canvas.getBoundingClientRect();ndc.set((e.clientX-rect.left)/rect.width*2-1,-(e.clientY-rect.top)/rect.height*2+1);raycaster.setFromCamera(ndc,camera);
-    if(mode==='step'){const node=block.pick(raycaster);if(node){onPick?.(node.x,node.y,node.z);return;}}
+    if(mode==='step'){const node=block.pick(raycaster);if(node)onPick?.(node.x,node.y,node.z);return;}
     const hits=raycaster.intersectObjects([solidMesh,...(points.visible?[points]:[])]);
     for(const hit of hits){const i=hit.object===solidMesh?solidList[hit.instanceId]:dotList[hit.index];if(i===undefined)continue;const xyz=coord(i);if(mode==='build'&&!insideClip(clip,...xyz))continue;onPick?.(...xyz);break;}
   });

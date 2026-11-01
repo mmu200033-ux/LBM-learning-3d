@@ -19,6 +19,8 @@ export function createClipBox(container, { L, H, W }, onChange) {
     if (state[axis+'0'] > state[axis+'1']) state[axis+(end === '0' ? '1' : '0')] = state[key];
     emit();
   }));
+  // Initialize the readouts and renderer from the same explicit defaults.
+  emit();
   return { get state() { return { ...state }; }, setState(next) { Object.assign(state, next); emit(); } };
 }
 

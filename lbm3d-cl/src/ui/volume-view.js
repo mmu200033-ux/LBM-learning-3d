@@ -46,7 +46,7 @@ export function createVolumeView(canvas,overlay,structure,solver) {
   const marker=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1.06,1.06,1.06)),new THREE.LineBasicMaterial({color:0xc99a2e,depthTest:false}));marker.renderOrder=10;scene.add(marker);
   const sliceTexture=new THREE.DataTexture(new Uint8Array(4),1,1,THREE.RGBAFormat);sliceTexture.minFilter=sliceTexture.magFilter=THREE.NearestFilter;sliceTexture.colorSpace=THREE.SRGBColorSpace;
   const slicePlane=new THREE.Mesh(new THREE.PlaneGeometry(1,1),new THREE.MeshBasicMaterial({map:sliceTexture,side:THREE.DoubleSide}));slicePlane.visible=false;scene.add(slicePlane);
-  let axis='y',position=Math.floor(H/2),sliceEnabled=false,lastUpdate=-Infinity,dirty=true,cMax=solver.params.cIn;
+  let axis='y',position=Math.floor(H/2),sliceEnabled=false,lastUpdate=-Infinity,dirty=true,cMax=solver.params.cIn,overrideBytes=null;
   const timings={updates:0,lastCpuMs:0,totalCpuMs:0,lastUploadMs:0,totalUploadMs:0};
   function updateSliceData(){
     if(!sliceEnabled)return;
@@ -54,7 +54,7 @@ export function createVolumeView(canvas,overlay,structure,solver) {
     for(let v=0;v<height;v++)for(let u=0;u<width;u++){
       const x=axis==='x'?position:u,y=axis==='x'?u:axis==='y'?position:v,z=axis==='z'?position:v;
       const i=idx(x,y,z),p=phase[i];let rgb;
-      if(p>=2){const c=PHASE_COLOR[p];rgb=[(c>>16)&255,(c>>8)&255,c&255];}else rgb=viridis(solver.c[i]/cMax);
+      if(p>=2){const c=PHASE_COLOR[p];rgb=[(c>>16)&255,(c>>8)&255,c&255];}else rgb=viridis(overrideBytes?overrideBytes[i]/255:solver.c[i]/cMax);
       bytes.set(rgb.map(v=>Math.round(v)),4*(u+width*v));bytes[4*(u+width*v)+3]=255;
     }
     if(sliceTexture.image.width!==width||sliceTexture.image.height!==height){sliceTexture.dispose();}
@@ -78,15 +78,17 @@ export function createVolumeView(canvas,overlay,structure,solver) {
   function updateTexture(force=false){
     const now=performance.now();if(!dirty||!force&&now-lastUpdate<100)return false;
     const start=performance.now();
-    for(let i=0;i<N;i++)concentration.image.data[i]=Math.round(255*Math.min(1,Math.max(0,solver.c[i]/cMax)));
+    if(overrideBytes) concentration.image.data.set(overrideBytes); else for(let i=0;i<N;i++)concentration.image.data[i]=Math.round(255*Math.min(1,Math.max(0,solver.c[i]/cMax)));
     concentration.needsUpdate=true;updateSliceData();
     const prepared=performance.now();renderer.initTexture(concentration);const end=performance.now();
     timings.updates++;timings.lastCpuMs=prepared-start;timings.totalCpuMs+=prepared-start;timings.lastUploadMs=end-prepared;timings.totalUploadMs+=end-prepared;
     lastUpdate=now;dirty=false;return true;
   }
   function setSelection(x,y,z){marker.position.copy(toWorld(x,y,z));}
+  function setSelectionVisible(value){marker.visible=!!value;}
   stage.pinLabel(overlay.querySelector('.inlet-label'),toWorld(-1.5,(H-1)/2,W+1));stage.pinLabel(overlay.querySelector('.outlet-label'),toWorld(L+0.5,(H-1)/2,W+1));
   setOptions({});updateTexture(true);
-  return {render(){updateTexture();stage.render();},setSelection,setOptions,markDirty(){dirty=true;},updateTexture,
+  function setFrame(frame){ overrideBytes=frame?.concentration??null; dirty=true; updateSliceData(); }
+  return {render(){updateTexture();stage.render();},setSelection,setSelectionVisible,setOptions,setFrame,markDirty(){dirty=true;},updateTexture,
     stats:()=>({volume:true,step:0.5,maxSteps:256,format:'R8',slice:{enabled:sliceEnabled,axis,position},showSolids:uniforms.uShowSolid.value,texture:{...timings,meanCpuMs:timings.totalCpuMs/Math.max(1,timings.updates),meanUploadMs:timings.totalUploadMs/Math.max(1,timings.updates)}})};
 }

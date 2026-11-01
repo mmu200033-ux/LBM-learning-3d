@@ -61,12 +61,14 @@
       <div class="transport">
         <button id="play" class="icon-btn">▶</button>
         <button id="step" class="icon-btn">⏭</button>
+        <button id="teaching-reset" hidden>重置教学格点</button>
         <label class="speed-control">
           速度 <input type="range" id="speed" min="0.1" max="3" step="0.1" value="1">
           <span id="speed-val">1.0×</span>
         </label>
       </div>
       <div class="caption"></div>
+      <div id="teaching-params" class="teaching-params" hidden></div>
     </div>
   </div>
 
@@ -112,8 +114,8 @@
         <input id="slice-position" type="range" min="0" max="31" step="1" value="16" aria-label="切片位置">
         <output id="slice-value">16</output>
       </div>
-      <button id="run-toggle" class="run-btn">连续求解</button>
     </div>
+    <div id="timeline" class="timeline" aria-label="浓度时间轴"></div>
     <div class="conc-wrap">
       <div class="canvas-wrap">
         <canvas id="conc-canvas"></canvas>

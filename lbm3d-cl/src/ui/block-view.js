@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { E, WEIGHT, OPP } from '../engine/index.js';
-import { PHASE, PHASE_COLOR, viridis } from './palette.js';
+import { PHASE, PHASE_COLOR } from './palette.js';
 import { blockOrigin, wrap, blockOffset, isFluid } from './block-state.js';
 
 const FLOW=0x1f7a72, BOUNCE=0xc8683a, CONJ=0x4a8fd4, GOLD=0xc99a2e;
@@ -31,8 +31,8 @@ function instances(geometry,capacity,{wireframe=false}={}) {
   },finish(){mesh.instanceMatrix.needsUpdate=true;if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;alpha.needsUpdate=true;}};
 }
 
-export function createBlockView(stage,structure,solver) {
-  const {L,H,W}=structure,{scene,toWorld}=stage;
+export function createBlockView(stage,structure,solver,{fixedOrigin=null,toWorld=stage.toWorld,cRef=1}={}) {
+  const {L,H,W}=structure,{scene}=stage;
   const group=new THREE.Group();scene.add(group);
   const packets=instances(new THREE.BoxGeometry(1,1,1),2401);
   const ghosts=instances(new THREE.BoxGeometry(1,1,1),1000,{wireframe:true});
@@ -48,12 +48,15 @@ export function createBlockView(stage,structure,solver) {
   pickMesh.frustumCulled=false;
   const pulsePlane=new THREE.Mesh(new THREE.PlaneGeometry(H,W).rotateY(Math.PI/2),new THREE.MeshBasicMaterial({color:FLOW,transparent:true,depthWrite:false,side:THREE.DoubleSide,opacity:0}));
   pulsePlane.position.copy(toWorld(1,(H-1)/2,(W-1)/2));scene.add(pulsePlane);
-  let selection={x:8,y:16,z:16},origin=blockOrigin(structure,selection),snapshot=null,progress=1,visible=false;
+  let selection={x:3,y:1,z:1},origin=fixedOrigin||blockOrigin(structure,selection),snapshot=null,progress=1,visible=false;
+  const sumLabel=document.createElement('span');sumLabel.className='teaching-sum';sumLabel.hidden=true;
+  stage.overlay.appendChild(sumLabel);
+  const sumPosition=new THREE.Vector3();stage.pinLabel(sumLabel,sumPosition);
   let nodes=[],counts={};
   const world=(x,y,z)=>toWorld(origin.x+x,origin.y+y,origin.z+z);
   const physical=(x,y,z)=>({x:origin.x+x,y:wrap(origin.y+y,H),z:wrap(origin.z+z,W)});
   function setSelection(next){
-    selection={...next};origin=blockOrigin(structure,selection);nodes=[];solids.reset();
+    selection={...next};origin=fixedOrigin||blockOrigin(structure,selection);nodes=[];solids.reset();
     const matrix=new THREE.Matrix4();
     for(let z=0;z<5;z++)for(let y=0;y<5;y++)for(let x=0;x<5;x++){
       const n=x+5*(y+5*z),p=world(x,y,z),actual=physical(x,y,z),i=actual.x+L*(actual.y+H*actual.z);
@@ -63,21 +66,24 @@ export function createBlockView(stage,structure,solver) {
       if(!isFluid(structure.phase[i]))solids.add(p,1,PHASE_COLOR[structure.phase[i]],structure.phase[i]===PHASE.PT?0.35:0.22);
     }
     solids.finish();pickMesh.instanceMatrix.needsUpdate=true;pickMesh.computeBoundingSphere();pickMesh.updateMatrixWorld(true);
-    marker.position.copy(toWorld(selection.x,origin.y+2,origin.z+2));
+    marker.position.copy(fixedOrigin ? toWorld(selection.x, selection.y, selection.z) : toWorld(selection.x, origin.y + 2, origin.z + 2));
+    sumPosition.copy(marker.position).add(new THREE.Vector3(0.35,0,0.45));
   }
   const offset=(x,y,z)=>blockOffset(x+1,y+1,z+1);
   function value(data,k,x,y,z){const n=data?.f[k*343+offset(x,y,z)];return Number.isFinite(n)?Math.max(0,n):0;}
   function phaseAt(data,x,y,z){return data?.phase[offset(x,y,z)]??PHASE.WALL;}
-  const size=(v,k)=>0.10+0.22*Math.sqrt(Math.max(0,Math.min(1.5,v/(WEIGHT[k]*solver.params.cIn))));
-  const alpha=(v,k)=>0.35+0.65*Math.sqrt(Math.max(0,Math.min(1,v/(WEIGHT[k]*solver.params.cIn))));
+  const size=(v,k)=>0.10+0.22*Math.sqrt(Math.max(0,Math.min(1.5,v/(WEIGHT[k]*cRef))));
+  const alpha=(v,k)=>0.35+0.65*Math.sqrt(Math.max(0,Math.min(1,v/(WEIGHT[k]*cRef))));
   const at=(x,y,z,k)=>world(x,y,z).addScaledVector(new THREE.Vector3(...E[k]),0.3);
   const isSelected=(x,y,z)=>origin.x+x===selection.x&&wrap(origin.y+y,H)===selection.y&&wrap(origin.z+z,W)===selection.z;
-  const sphereColor=new THREE.Color();
-  function radius(c){return 0.12+0.25*Math.cbrt(Math.max(0,c/solver.params.cIn));}
-  function sphere(p,c,opacity=1){const rgb=viridis(c/solver.params.cIn);sphereColor.setRGB(...rgb.map(v=>v/255),THREE.SRGBColorSpace);spheres.add(p,radius(c),sphereColor,opacity);}
+  function radius(c){return 0.12+0.25*Math.cbrt(Math.max(0,c/cRef));}
+  function sphere(p,c,opacity=1){spheres.add(p,radius(c),0x8e9a96,opacity);}
   function render(p=progress){
     progress=p;if(!snapshot)return;
     const {before,after,sub}=snapshot,b=before||after,a=after,q=easeQuad(p);
+    const selectedOffset=offset(selection.x-origin.x,selection.y-origin.y,selection.z-origin.z);
+    sumLabel.hidden=!visible||sub!==3||!isFluid(structure.phase[selection.x+L*(selection.y+H*selection.z)]);
+    sumLabel.textContent='Σf = '+a.c[selectedOffset].toFixed(4);
     for(const batch of [packets,ghosts,spheres,discs])batch.reset();
     counts={incoming:0,outgoing:0,bouncing:0,conjugate:0,reacting:0};
     let maxDelta=0;
@@ -126,7 +132,9 @@ export function createBlockView(stage,structure,solver) {
           }else if(!targetInside&&!blocked){opacity*=Math.min(1,(1-p)/0.3);counts.outgoing++;}
           if(isSelected(x,y,z)){scale=1.6;col=FLOW;}
           else if(isSelected(tx,ty,tz)){scale=1.6;col=GOLD;}
-          packets.add(start.lerp(end,q),size(v,k)*scale,col,opacity);
+          // A blocked packet reaches the face at the fixed mid-frame; keep
+          // the original quad easing and total 900 ms substep duration.
+          packets.add(start.lerp(end,blocked?easeQuad(Math.min(1,p*2)):q),size(v,k)*scale,col,opacity);
         }
       }
     }
@@ -135,7 +143,7 @@ export function createBlockView(stage,structure,solver) {
     for(const batch of [packets,ghosts,spheres,discs])batch.finish();
   }
   function setSnapshot(next,p=1){snapshot=next;render(p);}
-  function setVisible(value){visible=value;group.visible=value;if(!value)pulsePlane.visible=false;}
+  function setVisible(value){visible=value;group.visible=value;sumLabel.hidden=!value||snapshot?.sub!==3||!isFluid(structure.phase[selection.x+L*(selection.y+H*selection.z)]);if(!value)pulsePlane.visible=false;}
   function pick(raycaster){if(!visible)return null;const hit=raycaster.intersectObject(pickMesh)[0];return hit?nodes[hit.instanceId].actual:null;}
   setSelection(selection);setVisible(false);
   return {setSelection,setSnapshot,setVisible,animate:render,target:()=>world(2,2,2),pick,

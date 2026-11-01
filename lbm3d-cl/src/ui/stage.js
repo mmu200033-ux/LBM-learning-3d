@@ -127,5 +127,5 @@ export function createStage(canvas, overlay, { L, H, W }) {
     updateLabels();
   }
 
-  return { THREE, renderer, scene, camera, controls, toWorld, pinLabel, render, fit, flyTo, box, resetBtn };
+  return { THREE, renderer, scene, camera, controls, toWorld, overlay, pinLabel, render, fit, flyTo, box, resetBtn };
 }

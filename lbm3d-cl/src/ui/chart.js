@@ -36,9 +36,9 @@ export function createChart(svg, structure, solver) {
   const ionPath = svg.querySelector('#ion-line');
   const marker = svg.querySelector('#marker');
 
-  function update(selX) {
+  function update(selX, recordedProfile=null) {
     if (!solver) return;
-    const prof = solver.profileX();
+    const prof = recordedProfile || solver.profileX();
     // 路径画在已平移的 <g> 内，坐标不再加 ml/mt
     const scale = (x, c) => `${((x / (L - 1)) * pw).toFixed(1)},${(ph - Math.min(1, c / 7.354) * ph).toFixed(1)}`;
     const toPath = arr => Array.from(arr, (c, x) => ({ x, c }))
@@ -46,6 +46,7 @@ export function createChart(svg, structure, solver) {
       .map((p, i) => `${i === 0 ? 'M' : 'L'}${scale(p.x, p.c)}`).join(' ');
     porePath.setAttribute('d', toPath(prof.pore));
     ionPath.setAttribute('d', toPath(prof.ionomer));
+    marker.style.display=Number.isFinite(selX)?'':'none';
     const mx = ((selX / (L - 1)) * pw).toFixed(1);
     marker.setAttribute('x1', mx);
     marker.setAttribute('x2', mx);

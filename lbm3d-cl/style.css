@@ -229,5 +229,16 @@ footer { border-top: 1px solid var(--line); background: var(--panel); padding: 7
 .volume-controls select { border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); padding: 2px; }
 .volume-controls output { min-width: 16px; font-family: var(--mono); }
 .run-btn { margin-left: 0; }
+.timeline { display:flex; align-items:center; gap:8px; padding:6px 14px; border-bottom:1px solid var(--line); color:var(--muted); font-size:11px; }
+.timeline button { width:30px; padding:3px 0; }
+.timeline button.playing { background:var(--accent); color:#fff; border-color:var(--accent); }
+.timeline input[type=range] { flex:1; min-width:160px; accent-color:var(--accent); }
+.timeline output { min-width:170px; font-family:var(--mono); color:var(--ink); }
+.timeline select { border:1px solid var(--line); border-radius:4px; background:#fff; padding:2px; color:var(--ink); }
+.timeline [role=status] { min-width:100px; text-align:right; }
+.teaching-sum { position:absolute; z-index:5; pointer-events:none; font:11px var(--mono); color:var(--ink); background:rgba(255,255,255,.88); padding:2px 4px; border-radius:3px; }
+.teaching-params { margin-top:3px; font:10px var(--mono); color:var(--muted); }
+.macro-row.teaching { grid-template-columns:repeat(3,1fr); }
+#teaching-reset { font-size:11px; padding:4px 9px; }
 .model-note { font-size: 10px; margin-top: 3px; color: var(--muted); }
 #stencil { flex-shrink: 0; }
