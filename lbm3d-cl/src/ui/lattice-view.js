@@ -3,9 +3,9 @@ import { createStage } from './stage.js';
 import { PHASE, PHASE_COLOR, tauColor } from './palette.js';
 import { createClipBox, clipPlanes, insideClip } from './clip-box.js';
 import { createBlockView } from './block-view.js';
-import { TEACHING_ORIGIN, C_REF } from './teaching-lattice.js';
+import { blockOrigin } from './block-state.js';
 
-export function createLatticeView(canvas, overlay, structure, solver, teaching) {
+export function createLatticeView(canvas, overlay, structure, solver) {
   const { L,H,W,phase,order } = structure, N=L*H*W;
   const stage=createStage(canvas,overlay,structure);
   const { scene,renderer,toWorld,camera }=stage;
@@ -15,9 +15,12 @@ export function createLatticeView(canvas, overlay, structure, solver, teaching) 
   const solidList=Array.from({length:N},(_,i)=>i).filter(i=>phase[i]>=PHASE.IONOMER&&phase[i]<=PHASE.PT).sort((a,b)=>order[a]-order[b]);
   const solidMat=new THREE.MeshLambertMaterial({transparent:true,opacity:1});
   const solidMesh=new THREE.InstancedMesh(new THREE.BoxGeometry(0.94,0.94,0.94),solidMat,solidList.length);
+  const blockSolidMat=new THREE.MeshLambertMaterial({transparent:true,opacity:0.25,depthWrite:false});
+  const blockSolidMesh=new THREE.InstancedMesh(new THREE.BoxGeometry(0.94,0.94,0.94),blockSolidMat,125);
+  blockSolidMesh.count=0;
   const matrix=new THREE.Matrix4(), color=new THREE.Color();
   solidList.forEach((i,n)=>{const p=toWorld(...coord(i));matrix.makeTranslation(p.x,p.y,p.z);solidMesh.setMatrixAt(n,matrix);solidMesh.setColorAt(n,color.setHex(PHASE_COLOR[phase[i]]));});
-  solidMesh.instanceMatrix.needsUpdate=true; solidMesh.instanceColor.needsUpdate=true; scene.add(solidMesh);
+  solidMesh.instanceMatrix.needsUpdate=true; solidMesh.instanceColor.needsUpdate=true; scene.add(solidMesh,blockSolidMesh);
 
   // Every lattice site starts as a point, including future buffers and walls.
   const dotKey=i=>order[i]<0?Infinity:order[i];
@@ -37,13 +40,16 @@ export function createLatticeView(canvas, overlay, structure, solver, teaching) 
   scene.add(slabs);
   const frame=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1,1,1)),new THREE.LineDashedMaterial({color:0xc99a2e,dashSize:0.6,gapSize:0.4}));scene.add(frame);
   const selectedBox=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1.06,1.06,1.06)),new THREE.LineBasicMaterial({color:0xc99a2e,depthTest:false}));selectedBox.renderOrder=10;scene.add(selectedBox);
-  const block=createBlockView(stage,teaching.structure,teaching.solver,{fixedOrigin:TEACHING_ORIGIN,cRef:C_REF,toWorld:(x,y,z)=>new THREE.Vector3(x-3,y-2,z-2)});
+  const block=createBlockView(stage,structure,solver);
   let threshold=0,mode='build',cameraMode='global',tau=null,selection={x:8,y:16,z:16},onPick=null;
   let clip={enabled:true,x0:0,x1:L-1,y0:Math.floor(H/2),y1:H-1,z0:0,z1:W-1};
+  const stepPlane=new THREE.Plane(new THREE.Vector3(0,1,0),0);
   const clipControl=createClipBox(overlay.querySelector('#clip-controls'),structure,next=>{clip=next;applyClipping();});
   function applyClipping(){
-    const planes=mode==='build'?clipPlanes(clip,center):[];
+    const planes=mode==='build'?clipPlanes(clip,center):mode==='step'?[stepPlane]:[];
+    stepPlane.constant=-(blockOrigin(structure,selection).y-center.y-0.5);
     for(const material of [solidMat,pointMat,slabMat,wallMat]){material.clippingPlanes=planes;material.needsUpdate=true;}
+    blockSolidMat.clippingPlanes=[];blockSolidMat.needsUpdate=true;
     const geometry=new THREE.EdgesGeometry(new THREE.BoxGeometry(clip.x1-clip.x0+1,clip.y1-clip.y0+1,clip.z1-clip.z0+1));
     frame.geometry.dispose();frame.geometry=geometry;frame.position.copy(toWorld((clip.x0+clip.x1)/2,(clip.y0+clip.y1)/2,(clip.z0+clip.z1)/2));frame.computeLineDistances();
     frame.visible=mode==='build'&&clip.enabled;
@@ -59,26 +65,35 @@ export function createLatticeView(canvas, overlay, structure, solver, teaching) 
   }
   function background(){
     const build=mode==='build';
-    solidMesh.visible=build;points.visible=build;slabs.visible=build&&threshold>(structure.stages.find(s=>s.name==='buffer-wall')?.start??Infinity);
+    solidMesh.visible=build||mode==='step';blockSolidMesh.visible=mode==='step';points.visible=build;slabs.visible=(build&&threshold>(structure.stages.find(s=>s.name==='buffer-wall')?.start??Infinity))||mode==='step';
     stage.box.visible=build;selectedBox.visible=build;frame.visible=build&&clip.enabled;block.setVisible(!build);
     for(const el of overlay.querySelectorAll('.inlet-label,.outlet-label'))el.hidden=!build;
     for(const [i,el] of [...overlay.querySelectorAll('.legend-item')].entries())el.hidden=!build&&i!==0&&i!==2;
   }
   function setCameraMode(value,immediate=false){
     cameraMode=mode==='step'?'block':value;
-    if(cameraMode==='block'){const target=block.target();const distance=7/(2*Math.tan(THREE.MathUtils.degToRad(camera.fov/2))*0.75);stage.flyTo(target,distance,immediate);}else stage.fit();
-    overlay.querySelector('#camera-toggle').dataset.camera=value;background();
+    if(cameraMode==='block'){const target=block.target();const distance=5.04/(2*Math.tan(THREE.MathUtils.degToRad(camera.fov/2))*0.45);stage.flyTo(target,distance,immediate);}else stage.fit();
+    background();
   }
   function setSelection(x,y,z,{fly=true,immediate=false}={}){
     selection={x,y,z};selectedBox.position.copy(toWorld(x,y,z));
+    block.setSelection(selection);applyClipping();
+    const origin=blockOrigin(structure,selection),matrix=new THREE.Matrix4(),scale=new THREE.Vector3();
+    let innerCount=0;
+    solidList.forEach((i,n)=>{
+      const [px,py,pz]=coord(i),inside=px>=origin.x&&px<origin.x+5&&py>=origin.y&&py<origin.y+5&&pz>=origin.z&&pz<origin.z+5;
+      const world=toWorld(px,py,pz);matrix.compose(world,new THREE.Quaternion(),scale.setScalar(mode==='step'&&inside?0:1));solidMesh.setMatrixAt(n,matrix);
+      if(inside){matrix.makeTranslation(world.x,world.y,world.z);blockSolidMesh.setMatrixAt(innerCount,matrix);blockSolidMesh.setColorAt(innerCount,color.setHex(PHASE_COLOR[phase[i]]));innerCount++;}
+    });
+    solidMesh.instanceMatrix.needsUpdate=true;blockSolidMesh.count=innerCount;blockSolidMesh.instanceMatrix.needsUpdate=true;if(blockSolidMesh.instanceColor)blockSolidMesh.instanceColor.needsUpdate=true;
+    if(mode==='step'&&fly)setCameraMode('block',immediate);
   }
   function setMode(value,{immediate=false}={}){
-    mode=value;overlay.querySelector('#clip-controls').hidden=value!=='build';overlay.querySelector('#camera-toggle').hidden=true;
-    if(value==='step'){setTau(null);setCameraMode('block',immediate);}else{setCameraMode('global',immediate);}
+    mode=value;overlay.querySelector('#clip-controls').hidden=value!=='build';
+    if(value==='step'){setTau(null);setRevealOrder(Infinity);setCameraMode('block',immediate);}else{setCameraMode('global',immediate);}
     applyClipping();background();
   }
   stage.resetBtn.addEventListener('click',()=>{if(mode==='step'&&cameraMode==='block')setCameraMode('block');});
-  overlay.querySelector('#camera-toggle').addEventListener('click',()=>setCameraMode(cameraMode==='global'?'block':'global'));
 
   const raycaster=new THREE.Raycaster();raycaster.params.Points.threshold=0.4;const ndc=new THREE.Vector2();let down=null;
   canvas.addEventListener('pointerdown',e=>{down=[e.clientX,e.clientY];});

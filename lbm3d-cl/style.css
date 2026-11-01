@@ -215,7 +215,6 @@ footer { border-top: 1px solid var(--line); background: var(--panel); padding: 7
 .dual-range::before { content: ''; position: absolute; left: 0; right: 0; top: 9px; height: 3px; background: var(--line); }
 .dual-range input::-webkit-slider-thumb { appearance: none; width: 11px; height: 11px; border-radius: 50%; background: var(--accent); pointer-events: auto; cursor: ew-resize; }
 .clip-row output { text-align: right; font-family: var(--mono); font-size: 10px; }
-.camera-toggle { position: absolute; top: 8px; right: 97px; padding: 3px 9px; font-size: 11px; background: rgba(255,255,255,0.9); color: var(--muted); pointer-events: auto; }
 .tau-legend { position: absolute; bottom: 8px; left: 22px; width: 180px; font: 10px var(--mono); color: var(--muted); }
 .tau-gradient { height: 6px; background: linear-gradient(90deg,rgb(226,241,238),rgb(20,96,90)); border-radius: 2px; }
 .tau-legend > div:last-child { display: flex; justify-content: space-between; }
@@ -236,9 +235,10 @@ footer { border-top: 1px solid var(--line); background: var(--panel); padding: 7
 .timeline output { min-width:170px; font-family:var(--mono); color:var(--ink); }
 .timeline select { border:1px solid var(--line); border-radius:4px; background:#fff; padding:2px; color:var(--ink); }
 .timeline [role=status] { min-width:100px; text-align:right; }
-.teaching-sum { position:absolute; z-index:5; pointer-events:none; font:11px var(--mono); color:var(--ink); background:rgba(255,255,255,.88); padding:2px 4px; border-radius:3px; }
-.teaching-params { margin-top:3px; font:10px var(--mono); color:var(--muted); }
-.macro-row.teaching { grid-template-columns:repeat(3,1fr); }
-#teaching-reset { font-size:11px; padding:4px 9px; }
+.block-sum { position:absolute; z-index:5; pointer-events:none; font:11px var(--mono); color:var(--ink); background:rgba(255,255,255,.88); padding:2px 4px; border-radius:3px; }
+.step-status { display:flex; align-items:center; gap:8px; margin-top:3px; font:10px var(--mono); color:var(--muted); }
+.step-status button { padding:2px 8px; font-size:10px; }
+.macro-row.step-mode { grid-template-columns:repeat(3,1fr); }
+.caption small { display:block; margin-top:2px; font:10px var(--mono); color:var(--muted); }
 .model-note { font-size: 10px; margin-top: 3px; color: var(--muted); }
 #stencil { flex-shrink: 0; }

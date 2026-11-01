@@ -4,8 +4,7 @@ import { createVolumeView } from './ui/volume-view.js';
 import { createInspector } from './ui/inspector.js';
 import { createChart } from './ui/chart.js';
 import { readUrlState } from './ui/url-state.js';
-import { captureBlock, captureDistributions, wrap } from './ui/block-state.js';
-import { createTeachingLattice, TEACHING_ORIGIN, TEACHING_SELECTION, TEACHING_SUBSTEPS } from './ui/teaching-lattice.js';
+import { captureBlock, captureDistributions, blockFromSnapshot, blockOrigin, wrap } from './ui/block-state.js';
 import { createConcentrationRecording, createTimeline } from './ui/timeline.js';
 
 const BUILD_STAGES = [
@@ -29,48 +28,50 @@ const fixed = readUrlState(location.search);
 const structure = reconstruct({ seed:fixed.seed });
 // This solver belongs exclusively to the lower concentration panel.
 const solver = createSolver(structure, fixed.dt === undefined ? {} : { dt:fixed.dt });
-const teaching = createTeachingLattice();
-const ts = teaching.solver;
-const lattice = createLatticeView($('lattice-canvas'), document.querySelector('.lattice-overlay'), structure, solver, teaching);
+const ts = solver;
+const lattice = createLatticeView($('lattice-canvas'), document.querySelector('.lattice-overlay'), structure, solver);
 const volume = createVolumeView($('conc-canvas'), document.querySelector('.conc-overlay'), structure, solver);
 const inspector = createInspector($('panel-inspector'), structure, solver);
 const chart = createChart($('profile-chart'), structure, solver);
 const recording = createConcentrationRecording(structure, solver, { targetFrame:fixed.frame });
 const timeline = createTimeline($('timeline'), recording, displayConcentration, { targetFrame:fixed.frame });
 let mode = 'build', stage = 0, progress = 0, history = null, animation = null, playing = false, speed = 1;
-let buildSelection = defaultSelection(), teachingSelection = { ...TEACHING_SELECTION };
-let animationProgress = 1, nextPlay = Infinity, ready = false;
+let buildSelection = defaultSelection(), stepSelection = defaultSelection();
+let animationProgress = 1, nextPlay = Infinity, ready = false, autoInStep = false;
 const metrics = { frames:[], intervals:[], lastFrame:null };
 
 function defaultSelection() {
   const { L,H,W,phase } = structure;
-  for (let x=6;x<18;x++) for (let y=0;y<H;y++) for (let z=0;z<W;z++) {
-    if (phase[x+L*(y+H*z)] !== PHASE.IONOMER) continue;
-    let pt=false, pore=false;
-    for (const [dx,dy,dz] of E.slice(1)) { const p=phase[x+dx+L*(wrap(y+dy,H)+H*wrap(z+dz,W))]; pt ||= p===PHASE.PT; pore ||= p===PHASE.PORE; }
-    if (pt && pore) return { x,y,z };
+  for (let x=6;x<=12;x++) for (let y=0;y<H;y++) for (let z=0;z<W;z++) {
+    if (phase[x+L*(y+H*z)] !== PHASE.PORE) continue;
+    let xSolid=false, poreNeighbors=0;
+    for (let k=1;k<E.length;k++) { const [dx,dy,dz]=E[k],p=phase[x+dx+L*(wrap(y+dy,H)+H*wrap(z+dz,W))]; if(k<=2)xSolid ||= p===PHASE.CARBON||p===PHASE.PT; poreNeighbors += p===PHASE.PORE ? 1 : 0; }
+    if (xSolid && poreNeighbors >= 3) return { x,y,z };
   }
   return { x:8,y:16,z:16 };
 }
-const selection = () => mode === 'step' ? teachingSelection : buildSelection;
+const selection = () => mode === 'step' ? stepSelection : buildSelection;
 const snapshot = () => ({ f:captureDistributions(ts), c:ts.c.slice(), src:ts.src.slice() });
 
 function updateBlock() {
-  const current = captureBlock(teaching.structure, ts, TEACHING_ORIGIN);
-  lattice.block.setSnapshot(history ? { before:history.beforeBlock, after:history.afterBlock, sub:ts.lastSubstep } : { before:current, after:current, sub:ts.lastSubstep }, animationProgress);
+  const current = captureBlock(structure, ts, blockOrigin(structure, stepSelection));
+  const origin=blockOrigin(structure,stepSelection);
+  const before=history?blockFromSnapshot(structure,origin,{f:history.beforeF,c:history.beforeC,src:history.beforeSrc}):current;
+  const after=history?blockFromSnapshot(structure,origin,{f:history.afterF,c:history.afterC,src:history.afterSrc}):current;
+  lattice.block.setSnapshot({before,after,sub:ts.lastSubstep},animationProgress);
 }
 function executeCaptured() {
   // Inlet and reaction have no effect here; do not expose them as animations.
-  while (!TEACHING_SUBSTEPS.includes(ts.substep)) ts.stepSub();
-  const before = snapshot(), beforeBlock = captureBlock(teaching.structure, ts, TEACHING_ORIGIN);
+  while (![0,1,3,5].includes(ts.substep)) ts.stepSub();
+  const before = snapshot(), beforeBlock = captureBlock(structure, ts, blockOrigin(structure, stepSelection));
   ts.stepSub();
-  const after = snapshot(), afterBlock = captureBlock(teaching.structure, ts, TEACHING_ORIGIN);
+  const after = snapshot(), afterBlock = captureBlock(structure, ts, blockOrigin(structure, stepSelection));
   history = { beforeF:before.f, afterF:after.f, beforeC:before.c, afterC:after.c, beforeSrc:before.src, afterSrc:after.src, beforeBlock, afterBlock };
   animationProgress = 1; updateBlock();
 }
 function refreshUpper() {
   const s = selection();
-  inspector.setSource(mode === 'step' ? teaching.structure : structure, mode === 'step' ? ts : solver);
+  inspector.setSource(structure, solver);
   inspector.update(s.x,s.y,s.z,mode,mode === 'step' ? history : null,animation !== null || animationProgress < 1);
   renderStepper(); updateCaption(); updateButtons();
 }
@@ -84,15 +85,15 @@ function updateDiagnostics(d) {
   $('diag-flux').textContent=d.inletFlux.toFixed(3); $('diag-rxn').textContent=d.totalReaction.toFixed(3); $('diag-err').textContent=(d.balanceError*100).toFixed(1);
 }
 function updateSelection(next,{immediate=false}={}) {
-  const selected = selection(), data = mode === 'step' ? teaching.structure : structure;
+  const selected = selection(), data = structure;
   for (const key of ['x','y','z']) {
-    const min = mode === 'step' && key === 'x' ? 1 : 0;
-    const max = ({ x:data.L-(mode === 'step' ? 2 : 1),y:data.H-1,z:data.W-1 })[key];
+    const min = 0;
+    const max = ({ x:data.L-1,y:data.H-1,z:data.W-1 })[key];
     selected[key] = Math.max(min, Math.min(max, Math.round(Number.isFinite(next[key]) ? next[key] : selected[key])));
   }
-  if (mode === 'step') lattice.block.setSelection(selected);
-  else {
-    lattice.setSelection(selected.x,selected.y,selected.z,{immediate}); volume.setSelection(selected.x,selected.y,selected.z);
+  lattice.setSelection(selected.x,selected.y,selected.z,{immediate});
+  if (mode === 'build') {
+    volume.setSelection(selected.x,selected.y,selected.z);
     chart.update(selected.x,timeline.frame?.profile);
   }
   updateBlock(); refreshUpper();
@@ -100,9 +101,12 @@ function updateSelection(next,{immediate=false}={}) {
 function setMode(next,{immediate=false}={}) {
   finishAnimation(); mode=next; playing=false; animation=null; nextPlay=Infinity;
   document.querySelectorAll('.mode-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
-  $('teaching-reset').hidden=mode!=='step'; $('teaching-params').hidden=mode!=='step';
+  autoInStep=false;
+  $('step-status-row').hidden=mode!=='step';
+  $('step-status').textContent=mode==='step'?'时间步演示中，自动求解已暂停':'';
+  $('resume-solver').textContent='继续自动求解';
   lattice.setMode(mode,{immediate}); volume.setSelectionVisible(mode==='build');
-  document.querySelector('.grid-info').textContent=mode==='step'?'5 × 5 × 5':structure.L+' × '+structure.H+' × '+structure.W;
+  document.querySelector('.grid-info').textContent=structure.L+' × '+structure.H+' × '+structure.W;
   if (mode==='build') setBuild(stage,progress);
   updateSelection(selection(),{immediate});
   if (timeline.frame) chart.update(mode==='build'?buildSelection.x:null,timeline.frame.profile);
@@ -116,12 +120,15 @@ function setBuild(next,p) {
 }
 function renderStepper() {
   const list=mode==='build'?BUILD_STAGES:STEP_LABELS.map(label=>({label}));
-  const current=mode==='build'?stage:TEACHING_SUBSTEPS.indexOf(ts.lastSubstep);
+  const current=mode==='build'?stage:[0,1,3,5].indexOf(ts.lastSubstep);
   $('stage-stepper').innerHTML=list.map((item,i)=>'<div class="step-chip '+(i===current?'active':mode==='build'&&i<current?'done':'')+'" data-idx="'+i+'"><span class="num">'+(i+1)+'</span>'+item.label+(mode==='build'&&i===current&&progress>0&&progress<1?'<div class="bar" style="width:'+progress*100+'%"></div>':'')+'</div>').join('');
 }
 function updateCaption() {
-  const index=TEACHING_SUBSTEPS.indexOf(ts.lastSubstep);
-  document.querySelector('.caption').textContent=mode==='build'?BUILD_STAGES[stage].cap:index<0?'按 ⏭ 执行第一个子步：迁移':STEP_LABELS[index]+'：'+STEP_CAPS[index];
+  const index=[0,1,3,5].indexOf(ts.lastSubstep);
+  $('caption-text').textContent=mode==='build'?BUILD_STAGES[stage].cap:index<0?'按 ⏭ 执行第一个子步：迁移':STEP_LABELS[index]+'：'+STEP_CAPS[index];
+  const local=$('caption-local'),origin=blockOrigin(structure,stepSelection);
+  local.hidden=mode!=='step';
+  local.textContent='局部块 ('+origin.x+'..'+(origin.x+4)+', '+origin.y+'..'+(origin.y+4)+', '+origin.z+'..'+(origin.z+4)+') · 当前第 '+ts.t+' 步';
 }
 function beginAnimation() {
   animationProgress=0; animation={kind:'sub',start:performance.now(),duration:900/speed}; lattice.block.animate(0); refreshUpper();
@@ -139,7 +146,7 @@ function stepOnce() {
     if (progress>=1 || BUILD_STAGES[stage].dur===0) { if (stage===6) { playing=false;updateButtons();return; } setBuild(stage+1,0); }
     const duration=BUILD_STAGES[stage].dur/speed;
     if (duration>0) animation={kind:'build',start:performance.now(),duration}; else setBuild(stage,1);
-  } else { executeCaptured(); beginAnimation(); }
+  } else { executeCaptured(); const added=recording.recordCurrent();if(added.length)timeline.appended(recording.frames.length-1);beginAnimation(); }
   updateButtons();
 }
 function updateButtons() { $('play').textContent=playing?'⏸':'▶'; $('play').classList.toggle('playing',playing); }
@@ -148,22 +155,17 @@ function updateVolumeControls() {
   $('slice-position').max=max; $('slice-position').value=Math.min(max,Number($('slice-position').value)); $('slice-value').textContent=$('slice-position').value;
   volume.setOptions({showSolids:$('show-solids').checked,sliceEnabled:$('slice-enabled').checked,axis,position:Number($('slice-position').value)});
 }
-function resetTeaching() {
-  animation=null; playing=false; nextPlay=Infinity; teaching.reset(); history=null; animationProgress=1; teachingSelection={...TEACHING_SELECTION};
-  lattice.block.setSelection(teachingSelection); updateBlock(); refreshUpper();
-}
-
 $('seed').value=fixed.seed;
 $('regen').addEventListener('click',()=>{const q=new URLSearchParams(location.search);q.set('seed',$('seed').value);location.search=q.toString();});
 document.querySelectorAll('.mode-btn').forEach(b=>b.addEventListener('click',()=>{if(ready&&b.dataset.mode!==mode)setMode(b.dataset.mode);}));
 $('play').addEventListener('click',()=>{if(!ready)return;playing=!playing;if(playing&&!animation)stepOnce();updateButtons();});
 $('step').addEventListener('click',()=>{playing=false;stepOnce();});
-$('teaching-reset').addEventListener('click',resetTeaching);
+  $('resume-solver').addEventListener('click',()=>{autoInStep=!autoInStep;$('resume-solver').textContent=autoInStep?'暂停自动求解':'继续自动求解';});
 $('stage-stepper').addEventListener('click',e=>{
   const chip=e.target.closest('.step-chip'); if(!chip||!ready)return; const target=Number(chip.dataset.idx);
   finishAnimation(); playing=false; animation=null; nextPlay=Infinity;
   if(mode==='build'){setBuild(target,0);if(BUILD_STAGES[target].dur>0)animation={kind:'build',start:performance.now(),duration:BUILD_STAGES[target].dur/speed};}
-  else {for(let n=0;n<4;n++){executeCaptured();if(ts.lastSubstep===TEACHING_SUBSTEPS[target])break;}beginAnimation();}
+  else {const targetSub=[0,1,3,5][target]??0;for(let n=0;n<4;n++){executeCaptured();if(ts.lastSubstep===targetSub)break;}const added=recording.recordCurrent();if(added.length)timeline.appended(recording.frames.length-1);beginAnimation();}
   refreshUpper();
 });
 $('speed').addEventListener('input',()=>{
@@ -176,7 +178,6 @@ lattice.onPick((x,y,z)=>updateSelection({x,y,z}));
 const grid=structure.L+' × '+structure.H+' × '+structure.W;
 document.querySelector('.grid-info').textContent=grid; $('footer-grid').textContent=grid;
 $('footer-dt').textContent=(solver.params.dt*1e12).toFixed(1)+' ps'; $('footer-eta').textContent=solver.params.eta.toFixed(2)+' V'; $('colorbar-max').textContent=solver.params.cIn.toFixed(2);
-$('teaching-params').textContent='教学格点 5 × 5 × 5 · Δt = '+(teaching.dt*1e12).toFixed(4)+' ps · τ = '+teaching.tau.toFixed(4);
 
 function animate(now) {
   const start=performance.now();
@@ -186,10 +187,12 @@ function animate(now) {
     if(p>=1){const kind=animation.kind;animation=null;if(kind==='sub')refreshUpper();if(playing){if(kind==='build'&&stage===6)playing=false;else nextPlay=now+(kind==='sub'?300:0);}}
   }
   if(playing&&!animation&&now>=nextPlay){nextPlay=Infinity;stepOnce();}
-  if(!recording.complete){
+  if((mode==='build'||autoInStep)&&!recording.complete){
     const previousLength=recording.frames.length;
+    const previousT=ts.t;
     recording.advance(14);
     if(recording.frames.length!==previousLength)timeline.appended(previousLength);
+    if(mode==='step'&&autoInStep&&ts.t!==previousT){history=null;updateBlock();refreshUpper();}
     if(recording.complete&&fixed.frame!==null){ready=true;document.body.dataset.ready='true';}
   }
   timeline.tick(now); lattice.render(); volume.render(); updateButtons();
@@ -213,11 +216,11 @@ async function initialize() {
   ready=fixed.frame===null; document.body.dataset.ready=String(ready); requestAnimationFrame(animate);
 }
 window.__lbm={
-  get ready(){return ready;},structure,solver,teaching,recording,timeline,latticeView:lattice,concView:volume,
+  get ready(){return ready;},structure,solver,recording,timeline,latticeView:lattice,concView:volume,
   get state(){return{mode,stage,progress,selection:{...selection()},animationProgress,playing,running:!recording.complete,lastSubstep:ts.lastSubstep,t:ts.t,concentrationT:solver.t,timeline:timeline.stats()};},
   get history(){return history;},
-  stats(){const mean=a=>a.length?a.reduce((s,v)=>s+v,0)/a.length:0;return{state:this.state,lattice:lattice.stats(),volume:volume.stats(),teaching:{dt:teaching.dt,tau:teaching.tau},recording:recording.stats(),performance:{meanFrameCpuMs:mean(metrics.frames),meanIntervalMs:mean(metrics.intervals),fps:metrics.intervals.length?1000/mean(metrics.intervals):0}};},
-  setMode,setSelection:updateSelection,stepOnce,resetTeaching,
+  stats(){const mean=a=>a.length?a.reduce((s,v)=>s+v,0)/a.length:0;return{state:this.state,lattice:lattice.stats(),volume:volume.stats(),recording:recording.stats(),performance:{meanFrameCpuMs:mean(metrics.frames),meanIntervalMs:mean(metrics.intervals),fps:metrics.intervals.length?1000/mean(metrics.intervals):0}};},
+  setMode,setSelection:updateSelection,stepOnce,
   setAnimationProgress(p){finishAnimation();animationProgress=Math.max(0,Math.min(1,p));lattice.block.animate(animationProgress);refreshUpper();}
 };
 initialize().catch(error=>{document.body.dataset.ready='error';console.error(error);});

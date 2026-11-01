@@ -40,7 +40,7 @@ export function reconstruct(params = {}) {
   const radius = params.radius ?? 5;
   const porosity = params.porosity ?? 0.4;
   const ptc = params.ptc ?? 0.6;
-  const ic = params.ic ?? 0.6;
+  const ic = params.ic ?? 0.33;
   const seed = params.seed ?? 42;
   const bufferLayers = params.bufferLayers ?? 3;
   const N = L * H * W;
@@ -49,6 +49,7 @@ export function reconstruct(params = {}) {
   const order = new Int32Array(N).fill(-1);
   const poreSize = new Float32Array(N);
   const random = mulberry32(seed);
+  const ionomerRandom = mulberry32(seed + 12345);
   const targets = targetFractions(porosity, ptc, ic);
   const x0 = Math.max(1, bufferLayers);
   const x1 = Math.min(L - 1, L - bufferLayers);
@@ -233,32 +234,59 @@ export function reconstruct(params = {}) {
   stages.push({ name: 'pt', start: ptStart, end: sequence - 1 });
 
   const ionomerStart = sequence;
-  const ionomerCandidates = [];
+  const carbonSources = [];
+  const ptSources = [];
   for (let x = x0; x < x1; x += 1) {
     for (let y = 0; y < H; y += 1) {
       for (let z = 0; z < W; z += 1) {
         const i = idx(x, y, z);
-        if (phase[i] !== PHASE.PORE) continue;
-        let pt = 0;
-        let ion = 0;
-        let carbon = 0;
-        for (const j of neighbors(i)) {
-          if (phase[j] === PHASE.PT) pt += 1;
-          else if (phase[j] === PHASE.IONOMER) ion += 1;
-          else if (phase[j] === PHASE.CARBON) carbon += 1;
-        }
-        const score = pt * 0.6 + ion * 0.25 + carbon * 0.08;
-        ionomerCandidates.push({ i, score, jitter: random() });
+        if (phase[i] === PHASE.CARBON) carbonSources.push(i);
+        else if (phase[i] === PHASE.PT) ptSources.push(i);
       }
     }
   }
-  ionomerCandidates.sort((a, b) => b.score - a.score || b.jitter - a.jitter || a.i - b.i);
-  const ionomerLimit = Math.min(targetIonomer, ionomerCandidates.length);
-  for (let k = 0; k < ionomerLimit; k += 1) {
-    const i = ionomerCandidates[k].i;
-    phase[i] = PHASE.IONOMER;
-    order[i] = sequence;
-    sequence += 1;
+  const ionomerSources = [];
+  const prob = new Int32Array(N).fill(-1);
+  let ionomerCount = 0;
+  let passes = 0;
+  while (ionomerCount < targetIonomer && passes < 20000) {
+    passes += 1;
+    const newIonomerThisPass = [];
+    // 原算法：离聚物邻居 20000 → 碳邻居 10000 → 铂邻居 5000，后写的覆盖先写的
+    // 只处理上一轮新长出的离聚物，不是所有离聚物
+    const ionomerToProcess = passes === 1 ? [] : newIonomerThisPass;
+    for (const i of ionomerToProcess) {
+      for (const j of neighbors(i)) {
+        if (phase[j] === PHASE.PORE) prob[j] = Math.floor(ionomerRandom() * 20000);
+      }
+    }
+    for (const i of carbonSources) {
+      for (const j of neighbors(i)) {
+        if (phase[j] === PHASE.PORE) prob[j] = Math.floor(ionomerRandom() * 10000);
+      }
+    }
+    for (const i of ptSources) {
+      for (const j of neighbors(i)) {
+        if (phase[j] === PHASE.PORE) prob[j] = Math.floor(ionomerRandom() * 5000);
+      }
+    }
+    for (let x = x0; x < x1; x += 1) {
+      for (let y = 0; y < H; y += 1) {
+        for (let z = 0; z < W; z += 1) {
+          const i = idx(x, y, z);
+          if (phase[i] !== PHASE.PORE || prob[i] < 0 || prob[i] >= 20) continue;
+          phase[i] = PHASE.IONOMER;
+          order[i] = sequence;
+          sequence += 1;
+          ionomerSources.push(i);
+          newIonomerThisPass.push(i);
+          ionomerCount += 1;
+        }
+      }
+    }
+  }
+  if (ionomerCount < targetIonomer) {
+    console.warn(`Ionomer growth reached ${passes} passes after generating ${ionomerCount} of ${targetIonomer} target voxels.`);
   }
   stages.push({ name: 'ionomer', start: ionomerStart, end: sequence - 1 });
 

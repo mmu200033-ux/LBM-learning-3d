@@ -6,6 +6,15 @@ export function createConcentrationRecording(structure, solver, { targetFrame = 
   const frames = [], N = structure.L * structure.H * structure.W;
   const limit = targetFrame === null ? MAX_FRAMES : targetFrame + 1;
   let startedAt = null, completedAt = null, solveCpuMs = 0;
+  function recordCurrent() {
+    if (solver.t % RECORD_INTERVAL !== 0 || frames.length >= limit || frames.at(-1)?.step === solver.t) return [];
+    const concentration = new Uint8Array(N);
+    for (let i = 0; i < N; i += 1) concentration[i] = Math.round(255 * Math.min(1, Math.max(0, solver.c[i] / solver.params.cIn)));
+    const frame = { step: solver.t, timeSeconds: solver.t * solver.params.dt, concentration, profile: solver.profileX(), diagnostics: solver.diagnostics() };
+    frames.push(frame);
+    if (frames.length >= limit) completedAt = performance.now();
+    return [frame];
+  }
   function advance(budgetMs = 14) {
     if (frames.length >= limit) return [];
     const start = performance.now(), added = [];
@@ -13,19 +22,14 @@ export function createConcentrationRecording(structure, solver, { targetFrame = 
     // Complete time steps are atomic in the engine. Check the budget between steps.
     do {
       solver.step(1);
-      if (solver.t % RECORD_INTERVAL === 0) {
-        const concentration = new Uint8Array(N);
-        for (let i = 0; i < N; i += 1) concentration[i] = Math.round(255 * Math.min(1, Math.max(0, solver.c[i] / solver.params.cIn)));
-        const frame = { step: solver.t, timeSeconds: solver.t * solver.params.dt, concentration, profile: solver.profileX(), diagnostics: solver.diagnostics() };
-        frames.push(frame); added.push(frame);
-        if (frames.length >= limit) break;
-      }
+      added.push(...recordCurrent());
+      if (frames.length >= limit) break;
     } while (frames.length < limit && performance.now() - start < budgetMs);
     const end = performance.now(); solveCpuMs += end - start;
     if (frames.length >= limit) completedAt = end;
     return added;
   }
-  return { frames, advance,
+  return { frames, advance, recordCurrent,
     get complete() { return frames.length >= limit; },
     get capped() { return frames.length === MAX_FRAMES; },
     stats() { return { frames: frames.length, steps: solver.t, complete: this.complete, capped: this.capped, solveCpuMs, elapsedMs: startedAt === null ? 0 : (completedAt ?? performance.now()) - startedAt, retainedFieldBytes: frames.length * N }; }

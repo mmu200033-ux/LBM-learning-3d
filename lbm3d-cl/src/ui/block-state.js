@@ -4,10 +4,14 @@ export const wrap = (value, size) => ((value % size) + size) % size;
 export const isFluid = phase => phase === PHASE.PORE || phase === PHASE.IONOMER || phase === PHASE.BUFFER;
 export const blockOffset = (x,y,z) => x + 7 * (y + 7 * z);
 export function blockOrigin(structure, selection) {
-  return { x: Math.max(0, Math.min(structure.L - 5, selection.x - 2)), y: selection.y - 2, z: selection.z - 2 };
+  return {
+    x: Math.max(3, Math.min(structure.L - 8, selection.x - 2)),
+    y: Math.max(0, Math.min(structure.H - 5, selection.y - 2)),
+    z: Math.max(0, Math.min(structure.W - 5, selection.z - 2)),
+  };
 }
 
-// Keep y/z unwrapped for a contiguous teaching block; only physical data is wrapped.
+// Keep the captured neighborhood contiguous; y/z values are wrapped only when reading the solver.
 export function captureBlock(structure, solver, origin) {
   const { L,H,W } = structure;
   const c = new Float64Array(343), src = new Float64Array(343), phase = new Int8Array(343).fill(PHASE.WALL);

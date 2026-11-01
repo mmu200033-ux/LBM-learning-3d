@@ -33,10 +33,10 @@ export function createInspector(container,structure,solver){
     macro.c.parentElement.querySelector('label').textContent=teaching?'Σf':'浓度';
     macro.c.parentElement.querySelector('small').textContent=teaching?'':'mol/m³';
     macro.src.parentElement.hidden=teaching;
-    container.querySelector('.macro-row').classList.toggle('teaching',teaching);
+    container.querySelector('.macro-row').classList.toggle('step-mode',teaching);
     const i=x+structure.L*(y+structure.H*z),p=structure.phase[i],last=solver.lastSubstep,N=structure.L*structure.H*structure.W;
     phaseTag.textContent=PHASE_NAME[p];
-    info.textContent=last<0?'尚未开始':'子步：'+SUB_LABELS[last]+' · '+(teaching?'教学格点':'')+'第 '+solver.t+' 步';
+    info.textContent=last<0?'尚未开始':'子步：'+SUB_LABELS[last]+' · 第 '+solver.t+' 步';
     if(!isFluid(p)){
       for(const el of Object.values(macro))el.textContent='—';
       values.forEach(el=>{el.textContent='—';});arrowGroups.forEach(el=>{el.style.display='none';});
