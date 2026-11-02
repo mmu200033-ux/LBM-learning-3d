@@ -55,9 +55,9 @@ internal static class Launcher
             {
                 string line = rawLine.Trim();
                 if (line.Length == 0) continue;
-                int separator = line.IndexOf('|');
-                string id = line.Substring(0, separator);
-                string relative = line.Substring(separator + 1).Replace('/', Path.DirectorySeparatorChar);
+                string[] parts = line.Split('|');
+                string id = parts[0];
+                string relative = parts[1].Replace('/', Path.DirectorySeparatorChar);
                 string destination = Path.Combine(root, relative);
                 string directory = Path.GetDirectoryName(destination);
                 if (!String.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);

@@ -218,7 +218,8 @@ async function initialize() {
   }
   cacheLoading = false;
   if (timeline.frame) displayConcentration(timeline.frame);
-  chart.update(mode==='build'?buildSelection.x:null); lattice.render(); volume.render();
+  if (!timeline.frame) chart.update(mode==='build'?buildSelection.x:null);
+  lattice.render(); volume.render();
   ready=fixed.frame===null || recording.complete; document.body.dataset.ready=String(ready); requestAnimationFrame(animate);
 }
 window.__lbm={
