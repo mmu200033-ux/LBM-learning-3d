@@ -13,6 +13,8 @@ const mime = {
   '.json': 'application/json; charset=utf-8',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
+  '.bin': 'application/octet-stream',
+  '.gz': 'application/octet-stream',
 };
 
 const server = http.createServer(async (request, response) => {
@@ -26,7 +28,15 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     const body = await readFile(candidate);
-    response.writeHead(200, { 'Content-Type': mime[extname(candidate).toLowerCase()] ?? 'application/octet-stream' });
+    const extension = extname(candidate).toLowerCase();
+    const headers = { 'Content-Type': mime[extension] ?? 'application/octet-stream' };
+    if (extension === '.gz') {
+      headers['Content-Type'] = 'application/octet-stream';
+      headers['Content-Encoding'] = 'gzip';
+      headers.Vary = 'Accept-Encoding';
+      headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+    }
+    response.writeHead(200, headers);
     response.end(body);
   } catch (error) {
     response.writeHead(error.code === 'ENOENT' ? 404 : 500, { 'Content-Type': 'text/plain; charset=utf-8' });

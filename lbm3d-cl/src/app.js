@@ -5,7 +5,8 @@ import { createInspector } from './ui/inspector.js';
 import { createChart } from './ui/chart.js';
 import { readUrlState } from './ui/url-state.js';
 import { captureBlock, captureDistributions, blockFromSnapshot, blockOrigin, wrap, BLOCK_SIZE } from './ui/block-state.js';
-import { createConcentrationRecording, createTimeline } from './ui/timeline.js';
+import { createConcentrationRecording, createTimeline, MAX_FRAMES, RECORD_INTERVAL } from './ui/timeline.js';
+import { loadConcentrationCache } from './ui/concentration-cache.js';
 
 const BUILD_STAGES = [
   { key:'empty',label:'空格点阵',dur:0,cap:'初始化三维网格，每个格点可容纳一个相（孔隙、离聚物、碳、铂）。' },
@@ -28,16 +29,17 @@ const fixed = readUrlState(location.search);
 const structure = reconstruct({ seed:fixed.seed });
 // This solver belongs exclusively to the lower concentration panel.
 const solver = createSolver(structure, fixed.dt === undefined ? {} : { dt:fixed.dt });
-const ts = solver;
-const lattice = createLatticeView($('lattice-canvas'), document.querySelector('.lattice-overlay'), structure, solver);
+const ts = createSolver(structure, fixed.dt === undefined ? {} : { dt:fixed.dt });
+const lattice = createLatticeView($('lattice-canvas'), document.querySelector('.lattice-overlay'), structure, ts);
 const volume = createVolumeView($('conc-canvas'), document.querySelector('.conc-overlay'), structure, solver);
-const inspector = createInspector($('panel-inspector'), structure, solver);
+const inspector = createInspector($('panel-inspector'), structure, ts);
 const chart = createChart($('profile-chart'), structure, solver);
 const recording = createConcentrationRecording(structure, solver, { targetFrame:fixed.frame });
 const timeline = createTimeline($('timeline'), recording, displayConcentration, { targetFrame:fixed.frame });
+let cacheLoading = true;
 let mode = 'build', stage = 0, progress = 0, history = null, animation = null, playing = false, speed = 1;
 let buildSelection = defaultSelection(), stepSelection = defaultSelection();
-let animationProgress = 1, nextPlay = Infinity, ready = false, autoInStep = false;
+let animationProgress = 1, nextPlay = Infinity, ready = false;
 const metrics = { frames:[], intervals:[], lastFrame:null };
 
 function defaultSelection() {
@@ -61,7 +63,7 @@ function updateBlock() {
   lattice.block.setSnapshot({before,after,sub:ts.lastSubstep},animationProgress);
 }
 function executeCaptured() {
-  // Inlet and reaction have no effect here; do not expose them as animations.
+  // Execute inlet and reaction physics without separate teaching animations.
   while (![0,1,3,5].includes(ts.substep)) ts.stepSub();
   const before = snapshot(), beforeBlock = captureBlock(structure, ts, blockOrigin(structure, stepSelection));
   ts.stepSub();
@@ -71,7 +73,7 @@ function executeCaptured() {
 }
 function refreshUpper() {
   const s = selection();
-  inspector.setSource(structure, solver);
+  inspector.setSource(structure, ts);
   inspector.update(s.x,s.y,s.z,mode,mode === 'step' ? history : null,animation !== null || animationProgress < 1);
   renderStepper(); updateCaption(); updateButtons();
 }
@@ -101,10 +103,8 @@ function updateSelection(next,{immediate=false}={}) {
 function setMode(next,{immediate=false}={}) {
   finishAnimation(); mode=next; playing=false; animation=null; nextPlay=Infinity;
   document.querySelectorAll('.mode-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
-  autoInStep=false;
   $('step-status-row').hidden=mode!=='step';
-  $('step-status').textContent=mode==='step'?'时间步演示中，自动求解已暂停':'';
-  $('resume-solver').textContent='继续自动求解';
+  $('step-status').textContent=mode==='step'?'上下独立播放：本区逐步演示，下方浓度继续独立计算与回放。':'';
   lattice.setMode(mode,{immediate}); volume.setSelectionVisible(mode==='build');
   document.querySelector('.grid-info').textContent=structure.L+' × '+structure.H+' × '+structure.W;
   if (mode==='build') setBuild(stage,progress);
@@ -146,7 +146,7 @@ function stepOnce() {
     if (progress>=1 || BUILD_STAGES[stage].dur===0) { if (stage===6) { playing=false;updateButtons();return; } setBuild(stage+1,0); }
     const duration=BUILD_STAGES[stage].dur/speed;
     if (duration>0) animation={kind:'build',start:performance.now(),duration}; else setBuild(stage,1);
-  } else { executeCaptured(); const added=recording.recordCurrent();if(added.length)timeline.appended(recording.frames.length-1);beginAnimation(); }
+  } else { executeCaptured(); beginAnimation(); }
   updateButtons();
 }
 function updateButtons() { $('play').textContent=playing?'⏸':'▶'; $('play').classList.toggle('playing',playing); }
@@ -160,12 +160,11 @@ $('regen').addEventListener('click',()=>{const q=new URLSearchParams(location.se
 document.querySelectorAll('.mode-btn').forEach(b=>b.addEventListener('click',()=>{if(ready&&b.dataset.mode!==mode)setMode(b.dataset.mode);}));
 $('play').addEventListener('click',()=>{if(!ready)return;playing=!playing;if(playing&&!animation)stepOnce();updateButtons();});
 $('step').addEventListener('click',()=>{playing=false;stepOnce();});
-  $('resume-solver').addEventListener('click',()=>{autoInStep=!autoInStep;$('resume-solver').textContent=autoInStep?'暂停自动求解':'继续自动求解';});
 $('stage-stepper').addEventListener('click',e=>{
   const chip=e.target.closest('.step-chip'); if(!chip||!ready)return; const target=Number(chip.dataset.idx);
   finishAnimation(); playing=false; animation=null; nextPlay=Infinity;
   if(mode==='build'){setBuild(target,0);if(BUILD_STAGES[target].dur>0)animation={kind:'build',start:performance.now(),duration:BUILD_STAGES[target].dur/speed};}
-  else {const targetSub=[0,1,3,5][target]??0;for(let n=0;n<4;n++){executeCaptured();if(ts.lastSubstep===targetSub)break;}const added=recording.recordCurrent();if(added.length)timeline.appended(recording.frames.length-1);beginAnimation();}
+  else {const targetSub=[0,1,3,5][target]??0;for(let n=0;n<4;n++){executeCaptured();if(ts.lastSubstep===targetSub)break;}beginAnimation();}
   refreshUpper();
 });
 $('speed').addEventListener('input',()=>{
@@ -187,12 +186,10 @@ function animate(now) {
     if(p>=1){const kind=animation.kind;animation=null;if(kind==='sub')refreshUpper();if(playing){if(kind==='build'&&stage===6)playing=false;else nextPlay=now+(kind==='sub'?300:0);}}
   }
   if(playing&&!animation&&now>=nextPlay){nextPlay=Infinity;stepOnce();}
-  if((mode==='build'||autoInStep)&&!recording.complete){
+  if(!recording.complete && !cacheLoading){
     const previousLength=recording.frames.length;
-    const previousT=ts.t;
     recording.advance(14);
     if(recording.frames.length!==previousLength)timeline.appended(previousLength);
-    if(mode==='step'&&autoInStep&&ts.t!==previousT){history=null;updateBlock();refreshUpper();}
     if(recording.complete&&fixed.frame!==null){ready=true;document.body.dataset.ready='true';}
   }
   timeline.tick(now); lattice.render(); volume.render(); updateButtons();
@@ -212,12 +209,21 @@ async function initialize() {
   if(fixed.selection)updateSelection(fixed.selection,{immediate:true});
   if(fixed.slice){$('slice-enabled').checked=true;$('slice-axis').value=fixed.slice.axis;$('slice-position').max=({x:structure.L,y:structure.H,z:structure.W})[fixed.slice.axis]-1;$('slice-position').value=fixed.slice.position;}
   updateVolumeControls(); updateBlock(); refreshUpper(); updateDiagnostics(solver.diagnostics());
+  if (fixed.frame === null || !recording.complete) {
+    const cachedFrames = await loadConcentrationCache(structure, solver.params, { interval:RECORD_INTERVAL, maxFrames:MAX_FRAMES });
+    if (cachedFrames) {
+      recording.loadFrames(cachedFrames);
+      timeline.appended(0);
+    }
+  }
+  cacheLoading = false;
+  if (timeline.frame) displayConcentration(timeline.frame);
   chart.update(mode==='build'?buildSelection.x:null); lattice.render(); volume.render();
-  ready=fixed.frame===null; document.body.dataset.ready=String(ready); requestAnimationFrame(animate);
+  ready=fixed.frame===null || recording.complete; document.body.dataset.ready=String(ready); requestAnimationFrame(animate);
 }
 window.__lbm={
   get ready(){return ready;},structure,solver,recording,timeline,latticeView:lattice,concView:volume,
-  get state(){return{mode,stage,progress,selection:{...selection()},animationProgress,playing,running:!recording.complete,lastSubstep:ts.lastSubstep,t:ts.t,concentrationT:solver.t,timeline:timeline.stats()};},
+  get state(){return{mode,stage,progress,selection:{...selection()},animationProgress,playing,running:!recording.complete||cacheLoading,lastSubstep:ts.lastSubstep,t:ts.t,concentrationT:solver.t,timeline:timeline.stats()};},
   get history(){return history;},
   stats(){const mean=a=>a.length?a.reduce((s,v)=>s+v,0)/a.length:0;return{state:this.state,lattice:lattice.stats(),volume:volume.stats(),recording:recording.stats(),performance:{meanFrameCpuMs:mean(metrics.frames),meanIntervalMs:mean(metrics.intervals),fps:metrics.intervals.length?1000/mean(metrics.intervals):0}};},
   setMode,setSelection:updateSelection,stepOnce,

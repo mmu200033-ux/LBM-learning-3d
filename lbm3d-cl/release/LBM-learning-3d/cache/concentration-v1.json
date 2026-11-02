@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "grid": {
+    "L": 64,
+    "H": 32,
+    "W": 32,
+    "dx": 5e-9
+  },
+  "structureHash": "6aa8261c",
+  "solverParams": {
+    "D0": 0.00005,
+    "Hi": 1.5,
+    "RH": 1,
+    "T": 348,
+    "cIn": 7.354,
+    "clampNegative": true,
+    "cref": 40,
+    "dt": 1e-11,
+    "eta": 0.3,
+    "i0": 0.0015,
+    "kis": 0.01,
+    "molarMass": 32,
+    "reactionStartStep": 0
+  },
+  "solverParamsHash": "a95d7194",
+  "recordInterval": 25,
+  "maxFrames": 400,
+  "concentrationEncoding": "uint8-round-clamp-c-over-cIn",
+  "profileEncoding": "float32-le-pore-ionomer",
+  "diagnosticsEncoding": "float64-le-v1",
+  "frameBytes": 66152
+}

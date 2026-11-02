@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createSolver, E, PHASE } from '../src/engine/index.js';
-import { createConcentrationRecording, MAX_FRAMES, RECORD_INTERVAL } from '../src/ui/timeline.js';
+import { createConcentrationRecording, createTimeline, MAX_FRAMES, RECORD_INTERVAL } from '../src/ui/timeline.js';
 import { readUrlState } from '../src/ui/url-state.js';
 import { neighborStatus } from '../src/ui/neighbors.js';
 
@@ -108,4 +108,114 @@ test('frame URL state clamps against the shared 400-frame limit', () => {
   assert.equal(readUrlState('?frame=999').frame, 399);
   assert.equal(readUrlState('?frame=-4').frame, 0);
   assert.equal(readUrlState('').frame, null);
+});
+
+function timelineFixture({ targetFrame = null } = {}) {
+  const elements = new Map();
+  const container = { innerHTML: '', querySelector(id) {
+    if (!elements.has(id)) elements.set(id, { value: '', disabled: false, handlers: {}, classList: { toggle() {} }, setAttribute() {},
+      addEventListener(name, fn) { this.handlers[name] = fn; }, fire(name) { this.handlers[name]?.(); } });
+    return elements.get(id);
+  } };
+  const recording = { frames: [], limit: targetFrame === null ? 400 : targetFrame + 1,
+    get complete() { return this.frames.length === this.limit; }, get capped() { return this.frames.length === 400; } };
+  const displayed = [];
+  const timeline = createTimeline(container, recording, (frame, index) => displayed.push(index), { targetFrame });
+  function append(count) {
+    const previous = recording.frames.length;
+    for (let i = 0; i < count; i++) recording.frames.push({ step: (recording.frames.length + 1) * 25, timeSeconds: (recording.frames.length + 1) * 25e-12 });
+    timeline.appended(previous);
+  }
+  return { timeline, recording, displayed, append, slider: container.querySelector('#timeline-slider'), button: container.querySelector('#timeline-play'), speed: container.querySelector('#timeline-speed') };
+}
+
+test('timeline uses a fixed range and appending never advances the displayed frame', () => {
+  const f = timelineFixture();
+  assert.equal(Number(f.slider.max), 399);
+  f.append(10);
+  assert.equal(f.timeline.stats().index, 0);
+  f.timeline.tick(0); f.timeline.tick(100);
+  assert.equal(f.timeline.stats().index, 1);
+  f.append(10);
+  assert.equal(f.timeline.stats().index, 1);
+  assert.equal(Number(f.slider.max), 399);
+  f.slider.value = 5; f.slider.fire('input');
+  assert.equal(f.timeline.stats().playing, false);
+  f.append(10); f.timeline.tick(10000);
+  assert.equal(f.timeline.stats().index, 5);
+  f.slider.value = 399; f.slider.fire('input');
+  assert.equal(f.timeline.stats().index, 5);
+  assert.equal(f.timeline.stats().pendingTarget, 399);
+  f.append(10);
+  assert.equal(f.timeline.stats().index, 5);
+  assert.equal(f.timeline.stats().pendingTarget, 399);
+  f.append(370);
+  assert.equal(f.timeline.stats().index, 399);
+  assert.equal(f.timeline.stats().pendingTarget, null);
+});
+
+test('timeline allows seeking before any frame is cached and retargets pending work', () => {
+  const f = timelineFixture();
+  assert.equal(f.slider.disabled, false);
+  f.slider.value = 250; f.slider.fire('input');
+  assert.equal(f.timeline.stats().index, -1);
+  assert.equal(f.timeline.stats().pendingTarget, 250);
+  f.append(10);
+  assert.equal(f.timeline.stats().index, 0);
+  assert.equal(f.timeline.stats().pendingTarget, 250);
+  f.slider.value = 4; f.slider.fire('input');
+  assert.equal(f.timeline.stats().index, 4);
+  assert.equal(f.timeline.stats().pendingTarget, null);
+  f.slider.value = 300; f.slider.fire('input');
+  assert.equal(f.timeline.stats().pendingTarget, 300);
+  f.button.fire('click');
+  assert.equal(f.timeline.stats().pendingTarget, null);
+  assert.equal(f.timeline.stats().playing, true);
+});
+
+test('playback waits at a buffer frontier without jumping when a batch arrives', () => {
+  const f = timelineFixture(); f.append(1);
+  f.timeline.tick(0); f.timeline.tick(10000);
+  assert.equal(f.timeline.stats().index, 0);
+  assert.equal(f.timeline.stats().playing, true);
+  f.append(20);
+  assert.equal(f.timeline.stats().index, 0);
+  f.timeline.tick(20000); f.timeline.tick(20099);
+  assert.equal(f.timeline.stats().index, 0);
+  f.timeline.tick(20100);
+  assert.equal(f.timeline.stats().index, 1);
+  f.speed.value = 2; f.speed.fire('change');
+  f.timeline.tick(20150);
+  assert.equal(f.timeline.stats().index, 2);
+});
+
+test('completed playback stops at last frame and restarts; explicit frame waits for its target', () => {
+  const f = timelineFixture(); f.append(400);
+  f.timeline.tick(0); f.timeline.tick(39900);
+  assert.equal(f.timeline.stats().index, 399);
+  assert.equal(f.timeline.stats().playing, false);
+  f.button.fire('click');
+  assert.equal(f.timeline.stats().index, 0);
+  assert.equal(f.timeline.stats().playing, true);
+  const target = timelineFixture({ targetFrame: 3 });
+  target.append(2); assert.equal(target.timeline.stats().index, 0);
+  target.append(2); assert.equal(target.timeline.stats().index, 3);
+  assert.equal(target.timeline.stats().playing, false);
+  assert.equal(Number(target.slider.max), 3);
+});
+
+test('upper full-grid substeps and lower recording have independent evolving state', () => {
+  const structure = makeInterface(PHASE.PORE, PHASE.IONOMER);
+  const params = { cIn: 1, i0: 0, eta: 0 };
+  const upper = createSolver(structure, params), lower = createSolver(structure, params);
+  const recording = createConcentrationRecording(structure, lower, { targetFrame: 3 });
+  const lowerBefore = { f: lower.f.slice(), g: lower.g.slice(), c: lower.c.slice() };
+  upper.step(10); upper.stepSub();
+  assert.equal(lower.t, 0); assert.equal(lower.substep, 0);
+  for (const field of ['f','g','c']) assert.deepEqual(lower[field], lowerBefore[field]);
+  const upperBefore = { f: upper.f.slice(), g: upper.g.slice(), c: upper.c.slice(), t: upper.t, substep: upper.substep };
+  recording.advance(1e9);
+  assert.deepEqual(recording.frames.map(f => f.step), [25,50,75,100]);
+  assert.equal(upper.t, upperBefore.t); assert.equal(upper.substep, upperBefore.substep);
+  for (const field of ['f','g','c']) assert.deepEqual(upper[field], upperBefore[field]);
 });
