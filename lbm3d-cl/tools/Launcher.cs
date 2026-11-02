@@ -163,26 +163,72 @@ internal static class Launcher
         catch { return null; }
     }
 
+    private static void Log(string text)
+    {
+        try { File.AppendAllText(Path.Combine(Path.GetTempPath(), "LBM-learning-3d.log"), DateTime.Now.ToString("s") + " " + text + "\r\n"); }
+        catch { }
+    }
+
+    private static bool IsOurServer(int port)
+    {
+        try
+        {
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create("http://127.0.0.1:" + port + "/");
+            request.Timeout = 1500;
+            request.ReadWriteTimeout = 1500;
+            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+            using (StreamReader reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
+                return response.StatusCode == HttpStatusCode.OK && reader.ReadToEnd().Contains("三维 LBM 演示");
+        }
+        catch { return false; }
+    }
+
     private static void Main(string[] args)
     {
-        bool openWindow = true;
-        int port = 0;
-        foreach (string arg in args)
+        try
         {
-            if (arg == "--no-browser") openWindow = false;
-            else if (arg.StartsWith("--port=")) port = Int32.Parse(arg.Substring(7));
-            else if (arg.StartsWith("--idle=")) idleSeconds = Int32.Parse(arg.Substring(7));
-        }
+            bool openWindow = true;
+            int requestedPort = 0;
+            foreach (string arg in args)
+            {
+                if (arg == "--no-browser") openWindow = false;
+                else if (arg.StartsWith("--port=")) requestedPort = Int32.Parse(arg.Substring(7));
+                else if (arg.StartsWith("--idle=")) idleSeconds = Int32.Parse(arg.Substring(7));
+            }
 
-        bool created;
-        using (Mutex single = new Mutex(true, "LBM-learning-3d-demo", out created))
-        {
-            if (!created) return;
+            if (requestedPort == 0 && IsOurServer(17870))
+            {
+                Log("existing server detected on 17870");
+                if (openWindow) OpenWindow("http://127.0.0.1:17870/");
+                return;
+            }
+
             Extract();
-            listener = new TcpListener(IPAddress.Loopback, port);
-            listener.Start();
-            int actual = ((IPEndPoint)listener.LocalEndpoint).Port;
-            string url = "http://127.0.0.1:" + actual + "/";
+            int port = requestedPort;
+            if (port == 0)
+            {
+                for (int candidate = 17870; candidate <= 17879; candidate += 1)
+                {
+                    try
+                    {
+                        listener = new TcpListener(IPAddress.Loopback, candidate);
+                        listener.Start();
+                        port = candidate;
+                        break;
+                    }
+                    catch { }
+                }
+                if (port == 0) throw new InvalidOperationException("没有可用的本地端口");
+            }
+            else
+            {
+                listener = new TcpListener(IPAddress.Loopback, port);
+                listener.Start();
+            }
+
+            string url = "http://127.0.0.1:" + port + "/";
+            Log("serving " + url);
+            DateTime startedAt = DateTime.UtcNow;
 
             Task.Run(() =>
             {
@@ -203,12 +249,21 @@ internal static class Launcher
                 {
                     Thread.Sleep(5000);
                     DateTime last = lastPing;
-                    if (last != DateTime.MinValue && (DateTime.UtcNow - last).TotalSeconds > idleSeconds) Environment.Exit(0);
+                    bool expired = last == DateTime.MinValue
+                        ? (DateTime.UtcNow - startedAt).TotalSeconds > 120
+                        : (DateTime.UtcNow - last).TotalSeconds > idleSeconds;
+                    if (expired) Environment.Exit(0);
                 }
             });
 
             if (openWindow) OpenWindow(url);
             Thread.Sleep(Timeout.Infinite);
+        }
+        catch (Exception error)
+        {
+            Log("fatal: " + error);
+            try { System.Windows.Forms.MessageBox.Show("无法启动演示：" + error.Message, "LBM 三维演示"); }
+            catch { }
         }
     }
 }
