@@ -123,28 +123,75 @@ internal static class Launcher
         }
     }
 
+    private static string FindEdge()
+    {
+        string[] candidates =
+        {
+            Environment.GetEnvironmentVariable("ProgramFiles(x86)") + "\\Microsoft\\Edge\\Application\\msedge.exe",
+            Environment.GetEnvironmentVariable("ProgramFiles") + "\\Microsoft\\Edge\\Application\\msedge.exe",
+        };
+        foreach (string candidate in candidates)
+            if (!String.IsNullOrEmpty(candidate) && File.Exists(candidate)) return candidate;
+        return null;
+    }
+
+    // Opens a chromeless app window so the demo looks like a standalone page.
+    private static Process OpenWindow(string url)
+    {
+        string edge = FindEdge();
+        if (edge != null)
+        {
+            try
+            {
+                string profile = Path.Combine(Path.GetTempPath(), "LBM-learning-3d-window");
+                ProcessStartInfo info = new ProcessStartInfo(edge,
+                    "--app=" + url + " --user-data-dir=\"" + profile + "\" --no-first-run --no-default-browser-check --window-size=1440,1000");
+                info.UseShellExecute = false;
+                return Process.Start(info);
+            }
+            catch { }
+        }
+        try { return Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true }); }
+        catch { return null; }
+    }
+
     private static void Main(string[] args)
     {
-        bool openBrowser = true;
+        bool openWindow = true;
+        int port = 0;
         foreach (string arg in args)
-            if (arg == "--no-browser") openBrowser = false;
-
-        Extract();
-        listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        string url = "http://127.0.0.1:" + port + "/";
-        Console.WriteLine("LBM learning demo: " + url);
-        Console.WriteLine("关闭此窗口即可停止本地服务器。");
-        if (openBrowser)
         {
-            try { Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true }); }
-            catch (Exception error) { Console.WriteLine("无法自动打开浏览器：" + error.Message); }
+            if (arg == "--no-browser") openWindow = false;
+            else if (arg.StartsWith("--port=")) port = Int32.Parse(arg.Substring(7));
         }
-        while (true)
+
+        bool created;
+        using (Mutex single = new Mutex(true, "LBM-learning-3d-demo", out created))
         {
-            TcpClient client = listener.AcceptTcpClient();
-            Task.Run(() => Serve(client));
+            if (!created) return;
+            Extract();
+            listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            int actual = ((IPEndPoint)listener.LocalEndpoint).Port;
+            string url = "http://127.0.0.1:" + actual + "/";
+
+            Task.Run(() =>
+            {
+                while (true)
+                {
+                    TcpClient client;
+                    try { client = listener.AcceptTcpClient(); }
+                    catch { return; }
+                    Task.Run(() => Serve(client));
+                }
+            });
+
+            if (!openWindow) { Thread.Sleep(Timeout.Infinite); return; }
+            Process window = OpenWindow(url);
+            if (window == null) { Thread.Sleep(Timeout.Infinite); return; }
+            // Closing the app window stops the hidden server.
+            window.WaitForExit();
+            try { listener.Stop(); } catch { }
         }
     }
 }
