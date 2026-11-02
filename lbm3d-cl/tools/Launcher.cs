@@ -1,23 +1,22 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
 internal static class Launcher
 {
-    private static readonly string Root = AppDomain.CurrentDomain.BaseDirectory;
+    private static string root;
     private static TcpListener listener;
-
-    private static readonly string[] IndexFiles = { "index.html" };
 
     private static string ContentType(string path)
     {
-        string ext = Path.GetExtension(path).ToLowerInvariant();
-        switch (ext)
+        switch (Path.GetExtension(path).ToLowerInvariant())
         {
             case ".html": return "text/html; charset=utf-8";
             case ".css": return "text/css; charset=utf-8";
@@ -26,48 +25,45 @@ internal static class Launcher
             case ".json": return "application/json; charset=utf-8";
             case ".svg": return "image/svg+xml";
             case ".png": return "image/png";
-            case ".gz": return "application/octet-stream";
-            case ".bin": return "application/octet-stream";
+            case ".txt": return "text/plain; charset=utf-8";
             default: return "application/octet-stream";
         }
     }
 
-    private static void Serve(TcpClient client)
+    private static uint Hash(string value)
     {
-        using (client)
-        using (NetworkStream stream = client.GetStream())
-        using (StreamReader reader = new StreamReader(stream, Encoding.ASCII, false, 4096, true))
+        uint hash = 2166136261;
+        foreach (char c in value) { hash ^= c; hash = hash * 16777619; }
+        return hash;
+    }
+
+    private static void Extract()
+    {
+        Assembly assembly = Assembly.GetExecutingAssembly();
+        string manifest;
+        using (Stream stream = assembly.GetManifestResourceStream("LBM.manifest"))
+        using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
+            manifest = reader.ReadToEnd();
+
+        root = Path.Combine(Path.GetTempPath(), "LBM-learning-3d-" + Hash(manifest).ToString("x8"));
+        string marker = Path.Combine(root, "index.html");
+        if (!File.Exists(marker))
         {
-            try
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+            Directory.CreateDirectory(root);
+            foreach (string rawLine in manifest.Split('\n'))
             {
-                string requestLine = reader.ReadLine();
-                if (String.IsNullOrEmpty(requestLine)) return;
-                string[] parts = requestLine.Split(' ');
-                if (parts.Length < 2 || parts[0] != "GET")
-                {
-                    WriteResponse(stream, 405, "text/plain; charset=utf-8", Encoding.UTF8.GetBytes("Method Not Allowed"), false);
-                    return;
-                }
-
-                string rawPath = parts[1].Split('?')[0];
-                string relative = Uri.UnescapeDataString(rawPath.TrimStart('/')).Replace('/', Path.DirectorySeparatorChar);
-                if (String.IsNullOrEmpty(relative)) relative = "index.html";
-                string candidate = Path.GetFullPath(Path.Combine(Root, relative));
-                string rootPrefix = Root.EndsWith(Path.DirectorySeparatorChar.ToString()) ? Root : Root + Path.DirectorySeparatorChar;
-                if (!candidate.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase) || !File.Exists(candidate))
-                {
-                    WriteResponse(stream, 404, "text/plain; charset=utf-8", Encoding.UTF8.GetBytes("Not found"), false);
-                    return;
-                }
-
-                byte[] body = File.ReadAllBytes(candidate);
-                bool gzip = candidate.EndsWith(".gz", StringComparison.OrdinalIgnoreCase);
-                WriteResponse(stream, 200, ContentType(candidate), body, gzip);
-            }
-            catch
-            {
-                try { WriteResponse(stream, 500, "text/plain; charset=utf-8", Encoding.UTF8.GetBytes("Server error"), false); }
-                catch { }
+                string line = rawLine.Trim();
+                if (line.Length == 0) continue;
+                int separator = line.IndexOf('|');
+                string id = line.Substring(0, separator);
+                string relative = line.Substring(separator + 1).Replace('/', Path.DirectorySeparatorChar);
+                string destination = Path.Combine(root, relative);
+                string directory = Path.GetDirectoryName(destination);
+                if (!String.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+                using (Stream source = assembly.GetManifestResourceStream("LBM." + id))
+                using (FileStream target = File.Create(destination))
+                    source.CopyTo(target);
             }
         }
     }
@@ -92,21 +88,58 @@ internal static class Launcher
         stream.Write(body, 0, body.Length);
     }
 
-    private static void Main()
+    private static void Serve(TcpClient client)
     {
+        using (client)
+        using (NetworkStream stream = client.GetStream())
+        using (StreamReader reader = new StreamReader(stream, Encoding.ASCII, false, 4096, true))
+        {
+            try
+            {
+                string requestLine = reader.ReadLine();
+                if (String.IsNullOrEmpty(requestLine)) return;
+                string[] parts = requestLine.Split(' ');
+                if (parts.Length < 2 || parts[0] != "GET")
+                {
+                    WriteResponse(stream, 405, "text/plain; charset=utf-8", Encoding.UTF8.GetBytes("Method Not Allowed"), false);
+                    return;
+                }
+                string relative = Uri.UnescapeDataString(parts[1].Split('?')[0].TrimStart('/')).Replace('/', Path.DirectorySeparatorChar);
+                if (relative.Length == 0) relative = "index.html";
+                string candidate = Path.GetFullPath(Path.Combine(root, relative));
+                string prefix = root.EndsWith(Path.DirectorySeparatorChar.ToString()) ? root : root + Path.DirectorySeparatorChar;
+                if (!candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) || !File.Exists(candidate))
+                {
+                    WriteResponse(stream, 404, "text/plain; charset=utf-8", Encoding.UTF8.GetBytes("Not found"), false);
+                    return;
+                }
+                WriteResponse(stream, 200, ContentType(candidate), File.ReadAllBytes(candidate), candidate.EndsWith(".gz", StringComparison.OrdinalIgnoreCase));
+            }
+            catch
+            {
+                try { WriteResponse(stream, 500, "text/plain; charset=utf-8", Encoding.UTF8.GetBytes("Server error"), false); }
+                catch { }
+            }
+        }
+    }
+
+    private static void Main(string[] args)
+    {
+        bool openBrowser = true;
+        foreach (string arg in args)
+            if (arg == "--no-browser") openBrowser = false;
+
+        Extract();
         listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
         string url = "http://127.0.0.1:" + port + "/";
         Console.WriteLine("LBM learning demo: " + url);
         Console.WriteLine("关闭此窗口即可停止本地服务器。");
-        try
+        if (openBrowser)
         {
-            Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
-        }
-        catch (Exception error)
-        {
-            Console.WriteLine("无法自动打开浏览器：" + error.Message);
+            try { Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true }); }
+            catch (Exception error) { Console.WriteLine("无法自动打开浏览器：" + error.Message); }
         }
         while (true)
         {
