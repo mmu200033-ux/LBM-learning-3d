@@ -13,6 +13,8 @@ internal static class Launcher
 {
     private static string root;
     private static TcpListener listener;
+    private static DateTime lastPing = DateTime.MinValue;
+    private static int idleSeconds = 180;
 
     private static string ContentType(string path)
     {
@@ -70,7 +72,7 @@ internal static class Launcher
 
     private static void WriteResponse(NetworkStream stream, int status, string contentType, byte[] body, bool gzip)
     {
-        string statusText = status == 200 ? "OK" : status == 404 ? "Not Found" : "Method Not Allowed";
+        string statusText = status == 200 ? "OK" : status == 204 ? "No Content" : status == 404 ? "Not Found" : "Method Not Allowed";
         StringBuilder headers = new StringBuilder();
         headers.Append("HTTP/1.1 ").Append(status).Append(' ').Append(statusText).Append("\r\n");
         headers.Append("Content-Type: ").Append(contentType).Append("\r\n");
@@ -102,6 +104,12 @@ internal static class Launcher
                 if (parts.Length < 2 || parts[0] != "GET")
                 {
                     WriteResponse(stream, 405, "text/plain; charset=utf-8", Encoding.UTF8.GetBytes("Method Not Allowed"), false);
+                    return;
+                }
+                if (parts[1].Split('?')[0] == "/__lbm_ping")
+                {
+                    lastPing = DateTime.UtcNow;
+                    WriteResponse(stream, 204, "text/plain", new byte[0], false);
                     return;
                 }
                 string relative = Uri.UnescapeDataString(parts[1].Split('?')[0].TrimStart('/')).Replace('/', Path.DirectorySeparatorChar);
@@ -163,6 +171,7 @@ internal static class Launcher
         {
             if (arg == "--no-browser") openWindow = false;
             else if (arg.StartsWith("--port=")) port = Int32.Parse(arg.Substring(7));
+            else if (arg.StartsWith("--idle=")) idleSeconds = Int32.Parse(arg.Substring(7));
         }
 
         bool created;
@@ -186,12 +195,20 @@ internal static class Launcher
                 }
             });
 
-            if (!openWindow) { Thread.Sleep(Timeout.Infinite); return; }
-            Process window = OpenWindow(url);
-            if (window == null) { Thread.Sleep(Timeout.Infinite); return; }
-            // Closing the app window stops the hidden server.
-            window.WaitForExit();
-            try { listener.Stop(); } catch { }
+            // The page sends a heartbeat; stop the hidden server once the
+            // viewer has been closed long enough for the heartbeats to lapse.
+            Task.Run(() =>
+            {
+                while (true)
+                {
+                    Thread.Sleep(5000);
+                    DateTime last = lastPing;
+                    if (last != DateTime.MinValue && (DateTime.UtcNow - last).TotalSeconds > idleSeconds) Environment.Exit(0);
+                }
+            });
+
+            if (openWindow) OpenWindow(url);
+            Thread.Sleep(Timeout.Infinite);
         }
     }
 }

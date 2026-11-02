@@ -24,6 +24,9 @@ const STEP_CAPS = [
   '每个格点 7 个分量求和得到 Σf，就是这个格点的氧气浓度（式 2-38）。迁移和反弹只搬运分量，不改变全场总和。',
   '每个格点在矩空间向平衡态 fᵢᵉᑫ = wᵢ·Σf 松弛（式 2-32 右侧、2-35、2-36）。Σf 不变，各分量之间的差别变小。'
 ];
+// Only the packaged Windows launcher answers this; static hosting ignores it.
+const ping = () => fetch('/__lbm_ping', { cache: 'no-store' }).catch(() => {});
+ping(); setInterval(ping, 20000);
 const $ = id => document.getElementById(id);
 const fixed = readUrlState(location.search);
 const structure = reconstruct({ seed:fixed.seed });
